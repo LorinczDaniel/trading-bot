@@ -4,7 +4,7 @@ import ccxt
 
 from config.settings import load_settings
 from data.provider import MarketDataProvider
-from strategies.ma_crossover import MACrossover
+from strategies.factory import build_strategy, walk_forward_grid, STRATEGY_NAMES
 from backtest.engine import run_backtest
 from backtest.metrics import total_return, max_drawdown, sharpe_ratio, buy_and_hold_return
 from backtest.walkforward import walk_forward
@@ -21,10 +21,20 @@ def cmd_fetch(args):
 def cmd_backtest(args):
     prov = MarketDataProvider(exchange=None)
     df = prov.load_cached(args.symbol, args.timeframe)
-    res = run_backtest(df, MACrossover(fast=args.fast, slow=args.slow))
+    strategy = build_strategy(
+        args.strategy,
+        fast=args.fast,
+        slow=args.slow,
+        rsi_period=args.rsi_period,
+        rsi_low=args.rsi_low,
+        rsi_high=args.rsi_high,
+        trend_sma=args.trend_sma,
+    )
+    res = run_backtest(df, strategy)
     strat_ret = total_return(res.equity)
     hold_ret = buy_and_hold_return(df["close"])
     edge = strat_ret - hold_ret
+    print(f"Strategy:      {args.strategy}")
     print(f"Bars:          {len(res.equity)}")
     print(f"Final equity:  {res.final_equity:,.2f}")
     print(f"Total return:  {strat_ret:.2%}")
@@ -38,19 +48,25 @@ def cmd_backtest(args):
 def cmd_walkforward(args):
     prov = MarketDataProvider(exchange=None)
     df = prov.load_cached(args.symbol, args.timeframe)
-    grid = [(f, s) for f in (5, 10, 20) for s in (30, 50, 100) if f < s]
-    results = walk_forward(df, lambda p: MACrossover(*p), grid, n_splits=args.splits)
+    grid, make_strategy = walk_forward_grid(args.strategy, trend_sma=args.trend_sma)
+    results = walk_forward(df, make_strategy, grid, n_splits=args.splits)
     avg_is = sum(r["in_sample_return"] for r in results) / len(results)
     avg_oos = sum(r["oos_return"] for r in results) / len(results)
+    print(f"Strategy: {args.strategy}")
     for r in results:
         print(
-            f"fold {r['fold']}: best params {str(r['best_params']):>10}"
+            f"fold {r['fold']}: best params {str(r['best_params']):>16}"
             f"  in-sample {r['in_sample_return']:+.2%}  out-of-sample {r['oos_return']:+.2%}"
         )
-    print("-" * 60)
+    print("-" * 66)
     print(f"AVG in-sample:      {avg_is:+.2%}")
     print(f"AVG out-of-sample:  {avg_oos:+.2%}")
     print(f"Overfitting gap:    {avg_is - avg_oos:+.2%}  (big gap => curve-fit, not real edge)")
+
+
+def _add_strategy_args(parser):
+    parser.add_argument("--strategy", choices=STRATEGY_NAMES, default="ma")
+    parser.add_argument("--trend-sma", type=int, default=200, help="SMA period for the trend filter")
 
 
 def build_parser():
@@ -63,16 +79,21 @@ def build_parser():
     f.add_argument("--limit", type=int, default=500)
     f.set_defaults(func=cmd_fetch)
 
-    b = sub.add_parser("backtest", help="run MA-crossover backtest on cached candles")
+    b = sub.add_parser("backtest", help="backtest a strategy on cached candles")
     b.add_argument("--symbol", default="BTC/USDT")
     b.add_argument("--timeframe", default="1h")
+    _add_strategy_args(b)
     b.add_argument("--fast", type=int, default=20)
     b.add_argument("--slow", type=int, default=50)
+    b.add_argument("--rsi-period", type=int, default=14)
+    b.add_argument("--rsi-low", type=float, default=30.0)
+    b.add_argument("--rsi-high", type=float, default=70.0)
     b.set_defaults(func=cmd_backtest)
 
     w = sub.add_parser("walkforward", help="walk-forward validation (in-sample vs out-of-sample)")
     w.add_argument("--symbol", default="BTC/USDT")
     w.add_argument("--timeframe", default="1h")
+    _add_strategy_args(w)
     w.add_argument("--splits", type=int, default=4)
     w.set_defaults(func=cmd_walkforward)
 
