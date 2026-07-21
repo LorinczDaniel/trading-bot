@@ -7,6 +7,7 @@ from data.provider import MarketDataProvider
 from strategies.ma_crossover import MACrossover
 from backtest.engine import run_backtest
 from backtest.metrics import total_return, max_drawdown, sharpe_ratio, buy_and_hold_return
+from backtest.walkforward import walk_forward
 
 
 def cmd_fetch(args):
@@ -34,6 +35,24 @@ def cmd_backtest(args):
     print(f"Edge vs hold:  {edge:+.2%}  ({'BEAT hold' if edge > 0 else 'LOST to hold'})")
 
 
+def cmd_walkforward(args):
+    prov = MarketDataProvider(exchange=None)
+    df = prov.load_cached(args.symbol, args.timeframe)
+    grid = [(f, s) for f in (5, 10, 20) for s in (30, 50, 100) if f < s]
+    results = walk_forward(df, lambda p: MACrossover(*p), grid, n_splits=args.splits)
+    avg_is = sum(r["in_sample_return"] for r in results) / len(results)
+    avg_oos = sum(r["oos_return"] for r in results) / len(results)
+    for r in results:
+        print(
+            f"fold {r['fold']}: best params {str(r['best_params']):>10}"
+            f"  in-sample {r['in_sample_return']:+.2%}  out-of-sample {r['oos_return']:+.2%}"
+        )
+    print("-" * 60)
+    print(f"AVG in-sample:      {avg_is:+.2%}")
+    print(f"AVG out-of-sample:  {avg_oos:+.2%}")
+    print(f"Overfitting gap:    {avg_is - avg_oos:+.2%}  (big gap => curve-fit, not real edge)")
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="trading-bot")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -50,6 +69,12 @@ def build_parser():
     b.add_argument("--fast", type=int, default=20)
     b.add_argument("--slow", type=int, default=50)
     b.set_defaults(func=cmd_backtest)
+
+    w = sub.add_parser("walkforward", help="walk-forward validation (in-sample vs out-of-sample)")
+    w.add_argument("--symbol", default="BTC/USDT")
+    w.add_argument("--timeframe", default="1h")
+    w.add_argument("--splits", type=int, default=4)
+    w.set_defaults(func=cmd_walkforward)
 
     return p
 
