@@ -4,11 +4,21 @@ from data.provider import _to_dataframe
 from livestate import save_state
 
 
-def fetch_closed_candles(cb, symbol, timeframe, warmup):
-    """Fetch candles and drop the last (still-forming) one, so the bot only
-    ever decides on CLOSED bars."""
+def fetch_candles(cb, symbol, timeframe, warmup):
+    """Return (closed_df, live_price).
+
+    closed_df drops the last (still-forming) bar, so the bot only ever *decides*
+    on CLOSED candles. live_price is that forming bar's current close — the live
+    market price — used only for display/equity, at no extra API cost.
+    """
     raw = cb.fetch_ohlcv(symbol, timeframe=timeframe, limit=max(warmup + 5, 250))
-    return _to_dataframe(raw).iloc[:-1]
+    full = _to_dataframe(raw)
+    return full.iloc[:-1], float(full["close"].iloc[-1])
+
+
+def fetch_closed_candles(cb, symbol, timeframe, warmup):
+    """Just the closed candles (used by the single-cycle path)."""
+    return fetch_candles(cb, symbol, timeframe, warmup)[0]
 
 
 def act_and_save(trader, live, df, state_path):
@@ -36,9 +46,8 @@ def run_forever(cb, live, trader, symbol, timeframe, warmup, state_path, poll, s
     last_ts = None
     while True:
         try:
-            df = fetch_closed_candles(cb, symbol, timeframe, warmup)
+            df, live_price = fetch_candles(cb, symbol, timeframe, warmup)
             ts = df.index[-1]
-            price = float(df["close"].iloc[-1])
             note = ""
             if ts != last_ts:
                 last_ts = ts
@@ -47,7 +56,7 @@ def run_forever(cb, live, trader, symbol, timeframe, warmup, state_path, poll, s
             else:
                 bal = live.fetch_balance()
             trader.notifier.info(
-                f"price {price:,.2f} | equity {live.equity(price):,.2f} | "
+                f"live price {live_price:,.2f} | equity {live.equity(live_price):,.2f} | "
                 f"pos {bal['base']:.6f} | realized {trader.state.realized_pnl:+,.2f}{note}"
             )
         except KeyboardInterrupt:

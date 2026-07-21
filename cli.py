@@ -17,7 +17,7 @@ from risk.manager import RiskConfig, RiskManager, RiskState
 from monitoring.notifier import Notifier
 from trader import Trader
 from livestate import load_state, save_state
-from live_runner import fetch_closed_candles, act_and_save, run_forever
+from live_runner import fetch_candles, act_and_save, run_forever
 
 
 def cmd_fetch(args):
@@ -165,8 +165,7 @@ def cmd_run_live(args):
         return
 
     # single cycle: decide on the latest closed candle, then exit
-    df = fetch_closed_candles(cb, symbol, tf, args.warmup)
-    price_now = float(df["close"].iloc[-1])
+    df, price_now = fetch_candles(cb, symbol, tf, args.warmup)
     print(f"LIVE TESTNET — {args.strategy} on {symbol} {tf}  "
           f"(managed budget {st['quote']:,.2f} quote / {st['base']:.6f} base)")
     print("-" * 72)

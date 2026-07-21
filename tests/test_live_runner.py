@@ -8,7 +8,7 @@ from risk.manager import RiskConfig, RiskManager, RiskState
 from monitoring.notifier import Notifier
 from strategies.base import Strategy, Signal
 from trader import Trader
-from live_runner import fetch_closed_candles, act_and_save, run_forever
+from live_runner import fetch_candles, fetch_closed_candles, act_and_save, run_forever
 
 
 class HoldStrategy(Strategy):
@@ -41,6 +41,15 @@ def _trader():
 def test_fetch_closed_drops_forming_candle():
     df = fetch_closed_candles(FakeCb(_rows(5)), "BTC/USDT", "1h", warmup=0)
     assert len(df) == 4  # the last (forming) bar is dropped
+
+
+def test_fetch_candles_returns_closed_df_and_live_price():
+    # _rows(5): closes are 100..104; forming bar (104) is the live price,
+    # closed df keeps 100..103.
+    df, live_price = fetch_candles(FakeCb(_rows(5)), "BTC/USDT", "1h", warmup=0)
+    assert len(df) == 4
+    assert df["close"].iloc[-1] == 103.0   # last CLOSED bar
+    assert live_price == 104.0             # forming bar = live price
 
 
 def test_act_and_save_persists_state(tmp_path):
