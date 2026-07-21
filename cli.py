@@ -4,7 +4,7 @@ import os
 import ccxt
 
 from config.settings import load_settings
-from data.provider import MarketDataProvider, _to_dataframe
+from data.provider import MarketDataProvider
 from strategies.factory import build_strategy, walk_forward_grid, STRATEGY_NAMES
 from backtest.engine import run_backtest
 from backtest.metrics import total_return, max_drawdown, sharpe_ratio, buy_and_hold_return
@@ -17,6 +17,7 @@ from risk.manager import RiskConfig, RiskManager, RiskState
 from monitoring.notifier import Notifier
 from trader import Trader
 from livestate import load_state, save_state
+from live_runner import fetch_closed_candles, act_and_save, run_forever
 
 
 def cmd_fetch(args):
@@ -153,22 +154,23 @@ def cmd_run_live(args):
     trader.entry_price = st["entry_price"]
     trader.stop_price = st["stop_price"]
 
-    # Act only on CLOSED candles: drop the last (still-forming) bar.
-    raw = cb.fetch_ohlcv(symbol, timeframe=tf, limit=max(args.warmup + 5, 250))
-    df = _to_dataframe(raw).iloc[:-1]
-    price_now = float(df["close"].iloc[-1])
+    if args.loop:
+        print(f"LIVE TESTNET LOOP — {args.strategy} on {symbol} {tf} | "
+              f"polling every {args.poll}s | Ctrl+C to stop")
+        print("-" * 72)
+        try:
+            run_forever(cb, live, trader, symbol, tf, args.warmup, state_path, args.poll)
+        except KeyboardInterrupt:
+            print("\nStopped by user. State saved.")
+        return
 
+    # single cycle: decide on the latest closed candle, then exit
+    df = fetch_closed_candles(cb, symbol, tf, args.warmup)
+    price_now = float(df["close"].iloc[-1])
     print(f"LIVE TESTNET — {args.strategy} on {symbol} {tf}  "
           f"(managed budget {st['quote']:,.2f} quote / {st['base']:.6f} base)")
     print("-" * 72)
-    trader.step(df)
-
-    bal = live.fetch_balance()
-    save_state(state_path, {
-        "quote": bal["quote"], "base": bal["base"],
-        "entry_price": trader.entry_price, "stop_price": trader.stop_price,
-        "realized_pnl": rstate.realized_pnl, "peak": rstate.peak,
-    })
+    bal = act_and_save(trader, live, df, state_path)
     print("-" * 72)
     print(f"Equity: {live.equity(price_now):,.2f}   position(base): {bal['base']:.6f}   "
           f"realized: {rstate.realized_pnl:+,.2f}")
@@ -258,6 +260,9 @@ def build_parser():
     r.add_argument("--quiet", action="store_true", help="suppress per-trade log lines")
     r.add_argument("--live", action="store_true",
                    help="place REAL orders on the exchange TESTNET (fake money) instead of paper replay")
+    r.add_argument("--loop", action="store_true",
+                   help="with --live: run continuously, checking each candle, until Ctrl+C")
+    r.add_argument("--poll", type=int, default=60, help="seconds between checks in --loop mode")
     r.set_defaults(func=cmd_run)
 
     t = sub.add_parser("testnet-order", help="place ONE market order on the testnet (connectivity smoke test)")
