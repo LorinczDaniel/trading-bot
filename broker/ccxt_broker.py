@@ -7,7 +7,14 @@ class CcxtBroker(Broker):
     def __init__(self, exchange_id: str, api_key: str = "", api_secret: str = "", testnet: bool = True):
         exchange_class = getattr(ccxt, exchange_id)
         self.exchange = exchange_class(
-            {"apiKey": api_key, "secret": api_secret, "enableRateLimit": True}
+            {
+                "apiKey": api_key,
+                "secret": api_secret,
+                "enableRateLimit": True,
+                # WSL clocks drift; let ccxt sync timestamps to the server to
+                # avoid Binance -1021 "timestamp ahead of server time" errors.
+                "options": {"adjustForTimeDifference": True},
+            }
         )
         if testnet:
             self.exchange.set_sandbox_mode(True)
