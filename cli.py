@@ -8,6 +8,10 @@ from strategies.factory import build_strategy, walk_forward_grid, STRATEGY_NAMES
 from backtest.engine import run_backtest
 from backtest.metrics import total_return, max_drawdown, sharpe_ratio, buy_and_hold_return
 from backtest.walkforward import walk_forward
+from broker.paper_broker import PaperBroker
+from risk.manager import RiskConfig, RiskManager, RiskState
+from monitoring.notifier import Notifier
+from trader import Trader
 
 
 def cmd_fetch(args):
@@ -76,9 +80,54 @@ def cmd_walkforward(args):
         )
 
 
+def cmd_run(args):
+    prov = MarketDataProvider(exchange=None)
+    df = prov.load_cached(args.symbol, args.timeframe)
+    strategy = build_strategy(
+        args.strategy,
+        fast=args.fast,
+        slow=args.slow,
+        rsi_period=args.rsi_period,
+        rsi_low=args.rsi_low,
+        rsi_high=args.rsi_high,
+        trend_sma=args.trend_sma,
+    )
+    broker = PaperBroker(cash=args.cash, fee=args.fee)
+    config = RiskConfig(
+        risk_per_trade=args.risk,
+        stop_loss_pct=args.stop,
+        max_drawdown=args.max_dd,
+        max_session_loss=args.max_loss,
+    )
+    trader = Trader(
+        args.symbol, broker, strategy, RiskManager(config), RiskState(args.cash),
+        Notifier(echo=not args.quiet), fee=args.fee,
+    )
+    print(
+        f"PAPER RUN — {args.strategy} on {args.symbol} {args.timeframe}  "
+        f"(cash {args.cash:,.0f}, risk {args.risk:.0%}/trade, stop {args.stop:.0%}, "
+        f"kill-switch dd {args.max_dd:.0%})"
+    )
+    print("-" * 72)
+    trader.run_replay(df, warmup=args.warmup)
+    final_price = float(df["close"].iloc[-1])
+    print("-" * 72)
+    print(f"Final equity: {broker.equity(final_price):,.2f}  (started {args.cash:,.2f})")
+    print(f"Realized PnL: {trader.state.realized_pnl:+,.2f}")
+    print(f"Peak equity:  {trader.state.peak:,.2f}")
+
+
 def _add_strategy_args(parser):
     parser.add_argument("--strategy", choices=STRATEGY_NAMES, default="ma")
     parser.add_argument("--trend-sma", type=int, default=200, help="SMA period for the trend filter")
+
+
+def _add_param_args(parser):
+    parser.add_argument("--fast", type=int, default=20)
+    parser.add_argument("--slow", type=int, default=50)
+    parser.add_argument("--rsi-period", type=int, default=14)
+    parser.add_argument("--rsi-low", type=float, default=30.0)
+    parser.add_argument("--rsi-high", type=float, default=70.0)
 
 
 def build_parser():
@@ -95,11 +144,7 @@ def build_parser():
     b.add_argument("--symbol", default="BTC/USDT")
     b.add_argument("--timeframe", default="1h")
     _add_strategy_args(b)
-    b.add_argument("--fast", type=int, default=20)
-    b.add_argument("--slow", type=int, default=50)
-    b.add_argument("--rsi-period", type=int, default=14)
-    b.add_argument("--rsi-low", type=float, default=30.0)
-    b.add_argument("--rsi-high", type=float, default=70.0)
+    _add_param_args(b)
     b.set_defaults(func=cmd_backtest)
 
     w = sub.add_parser("walkforward", help="walk-forward validation (in-sample vs out-of-sample)")
@@ -108,6 +153,21 @@ def build_parser():
     _add_strategy_args(w)
     w.add_argument("--splits", type=int, default=4)
     w.set_defaults(func=cmd_walkforward)
+
+    r = sub.add_parser("run", help="run the bot in PAPER mode over cached candles (no real orders)")
+    r.add_argument("--symbol", default="BTC/USDT")
+    r.add_argument("--timeframe", default="1h")
+    _add_strategy_args(r)
+    _add_param_args(r)
+    r.add_argument("--cash", type=float, default=10_000.0)
+    r.add_argument("--fee", type=float, default=0.001)
+    r.add_argument("--risk", type=float, default=0.01, help="fraction of equity risked per trade")
+    r.add_argument("--stop", type=float, default=0.05, help="stop-loss distance below entry")
+    r.add_argument("--max-dd", type=float, default=0.20, help="kill-switch: max drawdown")
+    r.add_argument("--max-loss", type=float, default=0.10, help="kill-switch: max session realized loss")
+    r.add_argument("--warmup", type=int, default=50)
+    r.add_argument("--quiet", action="store_true", help="suppress per-trade log lines")
+    r.set_defaults(func=cmd_run)
 
     return p
 
