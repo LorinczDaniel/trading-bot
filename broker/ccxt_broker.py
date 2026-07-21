@@ -13,7 +13,12 @@ class CcxtBroker(Broker):
                 "enableRateLimit": True,
                 # WSL clocks drift; let ccxt sync timestamps to the server to
                 # avoid Binance -1021 "timestamp ahead of server time" errors.
-                "options": {"adjustForTimeDifference": True},
+                # createMarketBuyOrderRequiresPrice=False lets market BUYs be
+                # sized by base amount (BTC), matching how the bot sizes orders.
+                "options": {
+                    "adjustForTimeDifference": True,
+                    "createMarketBuyOrderRequiresPrice": False,
+                },
             }
         )
         if testnet:
