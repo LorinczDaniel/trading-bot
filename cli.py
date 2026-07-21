@@ -50,18 +50,30 @@ def cmd_walkforward(args):
     df = prov.load_cached(args.symbol, args.timeframe)
     grid, make_strategy = walk_forward_grid(args.strategy, trend_sma=args.trend_sma)
     results = walk_forward(df, make_strategy, grid, n_splits=args.splits)
-    avg_is = sum(r["in_sample_return"] for r in results) / len(results)
-    avg_oos = sum(r["oos_return"] for r in results) / len(results)
+    traded = [r for r in results if r["oos_trades"] > 0]
     print(f"Strategy: {args.strategy}")
     for r in results:
+        oos = f"{r['oos_return']:+.2%}" if r["oos_trades"] > 0 else "n/a (0 trades)"
         print(
             f"fold {r['fold']}: best params {str(r['best_params']):>16}"
-            f"  in-sample {r['in_sample_return']:+.2%}  out-of-sample {r['oos_return']:+.2%}"
+            f"  in-sample {r['in_sample_return']:+.2%} ({r['in_sample_trades']} tr)"
+            f"  out-of-sample {oos}"
         )
-    print("-" * 66)
-    print(f"AVG in-sample:      {avg_is:+.2%}")
-    print(f"AVG out-of-sample:  {avg_oos:+.2%}")
-    print(f"Overfitting gap:    {avg_is - avg_oos:+.2%}  (big gap => curve-fit, not real edge)")
+    print("-" * 72)
+    if traded:
+        avg_is = sum(r["in_sample_return"] for r in traded) / len(traded)
+        avg_oos = sum(r["oos_return"] for r in traded) / len(traded)
+        print(f"AVG in-sample:      {avg_is:+.2%}   (over {len(traded)} folds that traded)")
+        print(f"AVG out-of-sample:  {avg_oos:+.2%}")
+        print(f"Overfitting gap:    {avg_is - avg_oos:+.2%}  (big gap => curve-fit, not real edge)")
+    else:
+        print("No fold produced any trades — nothing to measure.")
+    if len(traded) < len(results):
+        print(
+            f"WARNING: {len(results) - len(traded)}/{len(results)} folds made 0 trades "
+            f"(fold too short for the strategy's lookback).\n"
+            f"         Fetch more data, use fewer --splits, or a smaller --trend-sma."
+        )
 
 
 def _add_strategy_args(parser):

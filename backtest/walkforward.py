@@ -36,12 +36,12 @@ def walk_forward(
         oos_end = n if k == n_splits - 1 else (k + 2) * fold
         oos_slice = df.iloc[(k + 1) * fold : oos_end]
 
-        best_params, best_is = param_grid[0], float("-inf")
+        best_params, best_is, best_is_trades = param_grid[0], float("-inf"), 0
         for params in param_grid:
             r = run_backtest(is_slice, make_strategy(params), initial_cash, fee, warmup)
             ret = total_return(r.equity)
             if ret > best_is:
-                best_is, best_params = ret, params
+                best_is, best_params, best_is_trades = ret, params, len(r.trades)
 
         oos = run_backtest(oos_slice, make_strategy(best_params), initial_cash, fee, warmup)
         results.append(
@@ -49,7 +49,9 @@ def walk_forward(
                 "fold": k,
                 "best_params": best_params,
                 "in_sample_return": best_is,
+                "in_sample_trades": best_is_trades,
                 "oos_return": total_return(oos.equity),
+                "oos_trades": len(oos.trades),
             }
         )
     return results
