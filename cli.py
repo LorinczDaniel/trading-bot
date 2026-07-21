@@ -6,7 +6,7 @@ from config.settings import load_settings
 from data.provider import MarketDataProvider
 from strategies.ma_crossover import MACrossover
 from backtest.engine import run_backtest
-from backtest.metrics import total_return, max_drawdown, sharpe_ratio
+from backtest.metrics import total_return, max_drawdown, sharpe_ratio, buy_and_hold_return
 
 
 def cmd_fetch(args):
@@ -21,12 +21,17 @@ def cmd_backtest(args):
     prov = MarketDataProvider(exchange=None)
     df = prov.load_cached(args.symbol, args.timeframe)
     res = run_backtest(df, MACrossover(fast=args.fast, slow=args.slow))
+    strat_ret = total_return(res.equity)
+    hold_ret = buy_and_hold_return(df["close"])
+    edge = strat_ret - hold_ret
     print(f"Bars:          {len(res.equity)}")
     print(f"Final equity:  {res.final_equity:,.2f}")
-    print(f"Total return:  {total_return(res.equity):.2%}")
+    print(f"Total return:  {strat_ret:.2%}")
     print(f"Max drawdown:  {max_drawdown(res.equity):.2%}")
     print(f"Sharpe:        {sharpe_ratio(res.equity):.2f}")
     print(f"Trades:        {len(res.trades)}")
+    print(f"Buy & hold:    {hold_ret:.2%}")
+    print(f"Edge vs hold:  {edge:+.2%}  ({'BEAT hold' if edge > 0 else 'LOST to hold'})")
 
 
 def build_parser():
