@@ -60,6 +60,30 @@ def test_act_and_save_persists_state(tmp_path):
     assert set(st) >= {"quote", "base", "entry_price", "stop_price", "realized_pnl", "peak"}
 
 
+class RaisingCb:
+    def fetch_ohlcv(self, symbol, timeframe="1h", limit=500):
+        raise RuntimeError("boom")
+
+
+def test_run_forever_survives_cycle_errors(tmp_path):
+    trader, broker = _trader()
+    calls = {"n": 0}
+
+    def fake_sleep(_seconds):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise KeyboardInterrupt
+
+    try:
+        run_forever(RaisingCb(), broker, trader, "BTC/USDT", "1h", 0,
+                    str(tmp_path / "s.json"), poll=0, sleep=fake_sleep)
+    except KeyboardInterrupt:
+        pass
+
+    warns = [m for m in trader.notifier.messages if "cycle error" in m]
+    assert len(warns) == 2  # errored each poll but the loop kept running
+
+
 def test_run_forever_heartbeats_and_evaluates_new_candle_once(tmp_path):
     trader, broker = _trader()
     cb = FakeCb(_rows(6))  # constant data -> a single distinct latest candle

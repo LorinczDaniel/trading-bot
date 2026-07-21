@@ -62,5 +62,8 @@ def run_forever(cb, live, trader, symbol, timeframe, warmup, state_path, poll, s
         except KeyboardInterrupt:
             raise
         except Exception as exc:  # keep the bot alive through transient errors
-            trader.notifier.warn(f"cycle error: {exc}")
+            # include the exception type so timeouts / 5xx / bans are distinguishable
+            trader.notifier.warn(
+                f"cycle error ({type(exc).__name__}): {exc or 'no detail'} — retrying in {poll}s"
+            )
         sleep(poll)
