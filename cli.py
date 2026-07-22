@@ -2,6 +2,7 @@ import argparse
 import os
 
 import ccxt
+import pandas as pd
 
 from config.settings import load_settings
 from data.provider import MarketDataProvider
@@ -19,6 +20,8 @@ from monitoring.telegram_notifier import TelegramNotifier
 from trader import Trader
 from livestate import load_state, save_state
 from reconcile import reconcile_live
+from tradelog import CsvTradeLog
+from report import summarize, equity_curve
 from live_runner import fetch_candles, act_and_save, run_forever
 
 
@@ -86,6 +89,34 @@ def cmd_walkforward(args):
             f"(fold too short for the strategy's lookback).\n"
             f"         Fetch more data, use fewer --splits, or a smaller --trend-sma."
         )
+
+
+def _ledger_path(mode, symbol, timeframe):
+    return os.path.join("ledger", f"{mode}_{symbol.replace('/', '-')}_{timeframe}.csv")
+
+
+def cmd_report(args):
+    path = _ledger_path(args.mode, args.symbol, args.timeframe)
+    if not os.path.exists(path):
+        raise SystemExit(f"No {args.mode} ledger at {path} — run the bot in {args.mode} mode first.")
+    trades = pd.read_csv(path)
+    if trades.empty:
+        raise SystemExit(f"Ledger {path} has no trades yet.")
+    s = summarize(trades)
+    pf = "inf" if s["profit_factor"] == float("inf") else f"{s['profit_factor']:.2f}"
+    print(f"REPORT — {args.mode} {args.symbol} {args.timeframe}   ({path})")
+    print("-" * 72)
+    print(f"Net PnL:       {s['net_pnl']:+,.2f}   (equity {s['equity_start']:,.2f} -> {s['equity_end']:,.2f})")
+    print(f"Return:        {s['return_pct']:+.2%}    Max drawdown: {s['max_drawdown']:.2%}   Peak: {s['equity_peak']:,.2f}")
+    print(f"Fills:         {s['fills']}  ({s['buys']} buys / {s['round_trips']} round-trips)")
+    print(f"Win rate:      {s['win_rate']:.1%}   (avg win {s['avg_win']:+,.2f} / avg loss {s['avg_loss']:+,.2f})")
+    print(f"Profit factor: {pf}   (gross, excl. entry fees)")
+    print(f"Total fees:    {s['total_fees']:,.2f}")
+    print(f"Realized PnL:  {s['realized_pnl']:+,.2f}   (gross of entry fees — Net PnL above is the true figure)")
+    eq_path = path.replace(".csv", "_equity.csv")
+    equity_curve(trades).to_csv(eq_path, index=False)
+    print("-" * 72)
+    print(f"Equity curve ({s['fills']} fills) written to {eq_path}")
 
 
 def _build_notifier(settings, alert_level, echo=True):
@@ -160,9 +191,12 @@ def cmd_run_live(args):
     rstate = RiskState(args.cash)
     rstate.peak = st["peak"]
     rstate.realized_pnl = st["realized_pnl"]
+    live_tradelog = CsvTradeLog(_ledger_path("live", symbol, tf))
+    live_tradelog.record_start(args.cash)  # baseline on a new ledger; no-op if it already has rows
     trader = Trader(
         symbol, live, _build_strategy_from_args(args), RiskManager(config),
         rstate, _build_notifier(settings, args.alert_level), fee=args.fee,
+        tradelog=live_tradelog,
     )
     trader.entry_price = st["entry_price"]
     trader.stop_price = st["stop_price"]
@@ -210,9 +244,15 @@ def cmd_run(args):
         max_drawdown=args.max_dd,
         max_session_loss=args.max_loss,
     )
+    # a paper replay is one self-contained experiment: start its ledger fresh
+    ledger_path = _ledger_path("paper", args.symbol, args.timeframe)
+    if os.path.exists(ledger_path):
+        os.remove(ledger_path)
+    tradelog = CsvTradeLog(ledger_path)
+    tradelog.record_start(args.cash)  # baseline = true starting capital
     trader = Trader(
         args.symbol, broker, strategy, RiskManager(config), RiskState(args.cash),
-        Notifier(echo=not args.quiet), fee=args.fee,
+        Notifier(echo=not args.quiet), fee=args.fee, tradelog=tradelog,
     )
     print(
         f"PAPER RUN — {args.strategy} on {args.symbol} {args.timeframe}  "
@@ -290,6 +330,13 @@ def build_parser():
                    help="live only: on startup, compare saved state vs the exchange. "
                         "halt=refuse to start on drift (default), warn=log & continue, off=skip")
     r.set_defaults(func=cmd_run)
+
+    rep = sub.add_parser("report", help="summarize a run's trade ledger + write an equity-curve CSV")
+    rep.add_argument("--symbol", default="BTC/USDT")
+    rep.add_argument("--timeframe", default="1h")
+    rep.add_argument("--mode", choices=["live", "paper"], default="live",
+                     help="which ledger to read: live_* or paper_*")
+    rep.set_defaults(func=cmd_report)
 
     t = sub.add_parser("testnet-order", help="place ONE market order on the testnet (connectivity smoke test)")
     t.add_argument("--symbol", default="BTC/USDT")
