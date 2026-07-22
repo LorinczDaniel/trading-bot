@@ -18,6 +18,7 @@ from monitoring.notifier import Notifier
 from monitoring.telegram_notifier import TelegramNotifier
 from trader import Trader
 from livestate import load_state, save_state
+from reconcile import reconcile_live
 from live_runner import fetch_candles, act_and_save, run_forever
 
 
@@ -171,6 +172,9 @@ def cmd_run_live(args):
     else:
         print("Telegram alerts: off (set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env to enable)")
 
+    # Compare persisted state against the live exchange before trading a cent.
+    reconcile_live(cb.exchange, symbol, st, args.reconcile)
+
     if args.loop:
         print(f"LIVE TESTNET LOOP — {args.strategy} on {symbol} {tf} | "
               f"polling every {args.poll}s | Ctrl+C to stop")
@@ -282,6 +286,9 @@ def build_parser():
     r.add_argument("--alert-level", type=int, choices=[1, 2, 3], default=1,
                    help="Telegram verbosity (live only, needs TELEGRAM_* in .env): "
                         "1=trades+problems, 2=+hourly heartbeat, 3=+every heartbeat")
+    r.add_argument("--reconcile", choices=["halt", "warn", "off"], default="halt",
+                   help="live only: on startup, compare saved state vs the exchange. "
+                        "halt=refuse to start on drift (default), warn=log & continue, off=skip")
     r.set_defaults(func=cmd_run)
 
     t = sub.add_parser("testnet-order", help="place ONE market order on the testnet (connectivity smoke test)")
