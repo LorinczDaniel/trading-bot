@@ -55,7 +55,7 @@ def run_forever(cb, live, trader, symbol, timeframe, warmup, state_path, poll, s
                 note = "  [new candle -> evaluated]"
             else:
                 bal = live.fetch_balance()
-            trader.notifier.info(
+            trader.notifier.heartbeat(
                 f"live price {live_price:,.2f} | equity {live.equity(live_price):,.2f} | "
                 f"pos {bal['base']:.6f} | realized {trader.state.realized_pnl:+,.2f}{note}"
             )

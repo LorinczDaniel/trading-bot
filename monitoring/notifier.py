@@ -19,3 +19,9 @@ class Notifier:
 
     def warn(self, msg: str) -> None:
         self._emit("WARN", msg)
+
+    def heartbeat(self, msg: str) -> None:
+        """Liveness ping. For the terminal notifier this is identical to info;
+        TelegramNotifier routes it separately (throttled/off) so a phone isn't
+        buzzed on every poll."""
+        self._emit("INFO", msg)

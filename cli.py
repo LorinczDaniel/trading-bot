@@ -15,6 +15,7 @@ from broker.ccxt_broker import CcxtBroker
 from broker.live_broker import LiveBroker
 from risk.manager import RiskConfig, RiskManager, RiskState
 from monitoring.notifier import Notifier
+from monitoring.telegram_notifier import TelegramNotifier
 from trader import Trader
 from livestate import load_state, save_state
 from live_runner import fetch_candles, act_and_save, run_forever
@@ -86,6 +87,17 @@ def cmd_walkforward(args):
         )
 
 
+def _build_notifier(settings, alert_level, echo=True):
+    """A TelegramNotifier when both token+chat_id are configured, else the plain
+    terminal Notifier. Keeps the bot fully functional with no Telegram set up."""
+    if settings.telegram_bot_token and settings.telegram_chat_id:
+        return TelegramNotifier(
+            settings.telegram_bot_token, settings.telegram_chat_id,
+            alert_level=alert_level, echo=echo,
+        )
+    return Notifier(echo=echo)
+
+
 def _build_strategy_from_args(args):
     return build_strategy(
         args.strategy,
@@ -149,10 +161,15 @@ def cmd_run_live(args):
     rstate.realized_pnl = st["realized_pnl"]
     trader = Trader(
         symbol, live, _build_strategy_from_args(args), RiskManager(config),
-        rstate, Notifier(echo=True), fee=args.fee,
+        rstate, _build_notifier(settings, args.alert_level), fee=args.fee,
     )
     trader.entry_price = st["entry_price"]
     trader.stop_price = st["stop_price"]
+
+    if isinstance(trader.notifier, TelegramNotifier):
+        print(f"Telegram alerts: ON (level {args.alert_level})")
+    else:
+        print("Telegram alerts: off (set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env to enable)")
 
     if args.loop:
         print(f"LIVE TESTNET LOOP — {args.strategy} on {symbol} {tf} | "
@@ -262,6 +279,9 @@ def build_parser():
     r.add_argument("--loop", action="store_true",
                    help="with --live: run continuously, checking each candle, until Ctrl+C")
     r.add_argument("--poll", type=int, default=60, help="seconds between checks in --loop mode")
+    r.add_argument("--alert-level", type=int, choices=[1, 2, 3], default=1,
+                   help="Telegram verbosity (live only, needs TELEGRAM_* in .env): "
+                        "1=trades+problems, 2=+hourly heartbeat, 3=+every heartbeat")
     r.set_defaults(func=cmd_run)
 
     t = sub.add_parser("testnet-order", help="place ONE market order on the testnet (connectivity smoke test)")
