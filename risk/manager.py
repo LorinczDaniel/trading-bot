@@ -8,6 +8,7 @@ class RiskConfig:
     max_drawdown: float = 0.20       # halt if equity falls this far below its peak
     max_session_loss: float = 0.10   # halt if realized loss reaches this fraction of start
     max_positions: int = 1           # max concurrent open positions
+    trailing_stop: bool = True       # ratchet the stop up as price makes new highs
 
 
 class RiskState:

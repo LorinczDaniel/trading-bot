@@ -33,9 +33,14 @@ class Trader:
         equity = self.broker.equity(price)
         self.state.update_peak(equity)
 
-        # 1. stop-loss takes priority over any signal
+        # 1. trailing stop: ratchet the stop up on new highs (never down)
+        if base > 0 and self.risk.config.trailing_stop:
+            self.stop_price = max(self.stop_price, price * (1 - self.risk.config.stop_loss_pct))
+
+        # 2. stop-loss (fixed or trailed) takes priority over any signal
         if base > 0 and price <= self.stop_price:
-            self._sell(price, base, "stop-loss hit", ts)
+            reason = "trailing-stop hit" if self.stop_price > self.entry_price else "stop-loss hit"
+            self._sell(price, base, reason, ts)
             return
 
         signal = self.strategy.generate(df)

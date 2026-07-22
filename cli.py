@@ -187,6 +187,7 @@ def cmd_run_live(args):
     config = RiskConfig(
         risk_per_trade=args.risk, stop_loss_pct=args.stop,
         max_drawdown=args.max_dd, max_session_loss=args.max_loss,
+        trailing_stop=not args.no_trailing,
     )
     rstate = RiskState(args.cash)
     rstate.peak = st["peak"]
@@ -243,6 +244,7 @@ def cmd_run(args):
         stop_loss_pct=args.stop,
         max_drawdown=args.max_dd,
         max_session_loss=args.max_loss,
+        trailing_stop=not args.no_trailing,
     )
     # a paper replay is one self-contained experiment: start its ledger fresh
     ledger_path = _ledger_path("paper", args.symbol, args.timeframe)
@@ -317,6 +319,8 @@ def build_parser():
     r.add_argument("--max-dd", type=float, default=0.20, help="kill-switch: max drawdown")
     r.add_argument("--max-loss", type=float, default=0.10, help="kill-switch: max session realized loss")
     r.add_argument("--warmup", type=int, default=50)
+    r.add_argument("--no-trailing", action="store_true",
+                   help="disable the trailing stop; use a fixed stop at entry (trailing is on by default)")
     r.add_argument("--quiet", action="store_true", help="suppress per-trade log lines")
     r.add_argument("--live", action="store_true",
                    help="place REAL orders on the exchange TESTNET (fake money) instead of paper replay")
