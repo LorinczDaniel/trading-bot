@@ -108,7 +108,12 @@ def scan_one(df, symbol: str, timeframe: str, strategy_name: str, *,
     res = simulate(df, strategy, config, cash=cash, fee=fee, warmup=warmup)
 
     net = total_return(res.equity) if len(res.equity) else 0.0
-    hold = buy_and_hold_return(df["close"], fee=fee)
+    # Baseline buy&hold over the SAME window the strategy was measured on: the
+    # equity series starts at bar `warmup`, not bar 0, so comparing against a
+    # bar-0 baseline would subtract returns measured over different spans.
+    # Guarded the same way as `net`: an empty equity series means warmup >=
+    # len(df), and `df["close"].iloc[warmup:]` would then be empty too.
+    hold = buy_and_hold_return(df["close"].iloc[warmup:], fee=fee) if len(res.equity) else 0.0
 
     grid, make_strategy = walk_forward_grid(strategy_name, trend_sma=trend_sma)
     try:

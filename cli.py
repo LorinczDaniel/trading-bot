@@ -67,7 +67,11 @@ def cmd_backtest(args):
         )
 
     strat_ret = total_return(res.equity)
-    hold_ret = buy_and_hold_return(df["close"])
+    # Baseline buy&hold over the same window the strategy was measured on: the
+    # equity series starts at bar `warmup`, not bar 0 (see scan.py's scan_one
+    # for the same fix). The SystemExit guard above already ensures
+    # args.warmup < len(df) here.
+    hold_ret = buy_and_hold_return(df["close"].iloc[args.warmup:], fee=args.fee)
     edge = strat_ret - hold_ret
     fees = sum(float(f.get("fee") or 0.0) for f in res.fills)
     print(f"Strategy:      {args.strategy}")

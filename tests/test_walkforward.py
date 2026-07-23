@@ -5,7 +5,6 @@ import pytest
 from backtest.walkforward import walk_forward
 from strategies.base import Strategy, Signal
 from strategies.ma_crossover import MACrossover
-from strategies.trend_filter import TrendFilter
 
 
 def _prices(n):
@@ -40,19 +39,49 @@ def test_walk_forward_single_param_grid():
 
 
 def test_walk_forward_reports_trade_counts():
+    # min_trades_fold=1: with the default of 5, MACrossover(3, 8) makes too
+    # few in-sample trades on these 24-bar folds to clear the gate, so every
+    # fold fell back to `valid=False` and this only ever read the hardcoded
+    # 0 literals from walk_forward's invalid-fold branch -- it would still
+    # pass if the entire out-of-sample `simulate` call were deleted. Lowering
+    # the gate lets real folds trade, and asserting nonzero counts (not just
+    # `isinstance`) pins that the reported numbers came from actual trading.
     df = pd.DataFrame({"close": _prices(120)})
-    results = walk_forward(df, lambda p: MACrossover(*p), [(3, 8)], n_splits=4, warmup=8)
+    results = walk_forward(df, lambda p: MACrossover(*p), [(3, 8)], n_splits=4, warmup=8,
+                           min_trades_fold=1)
+    assert all(r["valid"] for r in results)
     for r in results:
-        assert isinstance(r["in_sample_trades"], int)
+        assert isinstance(r["in_sample_trades"], int) and r["in_sample_trades"] > 0
         assert isinstance(r["oos_trades"], int)
+    assert any(r["oos_trades"] > 0 for r in results)
 
 
-def test_walk_forward_zero_trades_when_lookback_exceeds_fold():
-    # fold = 120 // 5 = 24 bars, but the trend filter needs 100 -> never trades
+def test_walk_forward_oos_return_equals_next_folds_in_sample_return():
+    """Renamed from test_walk_forward_zero_trades_when_lookback_exceeds_fold.
+
+    That test used TrendFilter(sma_period=100) on 24-bar folds, which never
+    makes an in-sample trade either -- min_trades_fold=1 cannot fix that (0
+    trades still fails a threshold of 1), so every fold stayed
+    `valid=False` and the test only ever read the hardcoded 0 literals from
+    walk_forward's invalid-fold branch; the real out-of-sample `simulate`
+    call was never exercised.
+
+    Swapped to MACrossover(3, 8) with a single-entry grid, which does trade.
+    Fold k's OOS slice is exactly fold k+1's IS slice, and with only one
+    grid candidate, that slice is always the "best" one -- so fold k's
+    reported oos_return (from the OOS simulate call) must exactly equal
+    fold k+1's independently-computed in_sample_return (from the IS
+    optimization loop). A stub, a deleted OOS simulate() call, or an OOS
+    calculation that silently reused in-sample numbers would break this
+    equality, which two genuinely separate code paths currently satisfy.
+    """
     df = pd.DataFrame({"close": _prices(120)})
-    make = lambda p: TrendFilter(MACrossover(3, 8), sma_period=100)  # noqa: E731
-    results = walk_forward(df, make, [(3, 8)], n_splits=4, warmup=8)
-    assert all(r["oos_trades"] == 0 for r in results)
+    results = walk_forward(df, lambda p: MACrossover(*p), [(3, 8)], n_splits=4, warmup=8,
+                           min_trades_fold=1)
+    assert all(r["valid"] for r in results)
+    assert all(r["oos_trades"] > 0 for r in results)
+    for k in range(len(results) - 1):
+        assert results[k]["oos_return"] == pytest.approx(results[k + 1]["in_sample_return"])
 
 
 class EveryNBars(Strategy):
@@ -95,3 +124,28 @@ def test_fold_with_no_valid_params_is_marked_invalid():
 
     assert all(not r["valid"] for r in results)
     assert all(r["best_params"] is None for r in results)
+
+
+def test_walk_forward_pins_a_known_oos_outcome():
+    """avg_oos is the sole input to the `overfit` gate -- it decided one of
+    the 16 rejections in the real scan -- but no test asserted a specific
+    oos_return or a nonzero oos_trades count; test_walk_forward_structure
+    only checks `isinstance(r["oos_return"], float)`, which a stubbed-out
+    out-of-sample simulation would still satisfy.
+
+    Pins an exact value from a fully scripted, deterministic strategy
+    (EveryNBars) over a deterministic linear price series, so a regression
+    that breaks, stubs, or zeroes out the out-of-sample simulate() call is
+    caught. The expected value below was read from one real run of this
+    exact setup, not hand-derived.
+    """
+    n = 200
+    df = pd.DataFrame({"close": [100.0 + i for i in range(n)]})
+    results = walk_forward(df, lambda p: EveryNBars(p), [5], n_splits=4, warmup=4,
+                           min_trades_fold=1)
+
+    r0 = results[0]
+    assert r0["valid"]
+    assert r0["oos_trades"] == 3
+    assert r0["oos_trades"] > 0
+    assert r0["oos_return"] == pytest.approx(0.02275111782674788)

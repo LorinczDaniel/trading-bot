@@ -187,6 +187,46 @@ def test_format_table_stays_aligned_when_fee_drag_is_infinite():
         finite_line[finite_line.index("0.12") + 4:]
 
 
+def test_scan_one_benchmarks_edge_over_the_traded_window_not_bar_zero():
+    """`net_return` comes from the equity Series, which starts at bar
+    `warmup`; the buy&hold baseline must be measured over that same window,
+    not from bar 0, or `edge = net - hold` subtracts returns measured over
+    different spans.
+
+    Confines a huge, one-off price move to the warmup region (never seen
+    again afterward), so the bar-0 baseline and the bar-`warmup` baseline
+    diverge sharply. This would fail under the old
+    `buy_and_hold_return(df["close"], fee=fee)` call, which baselined from
+    bar 0.
+    """
+    import numpy as np
+    from backtest.scan import scan_one
+    from backtest.metrics import buy_and_hold_return
+
+    warmup = 50
+    n = 400
+    # Warmup region: a violent, one-off run-up (100 -> ~1080).
+    warmup_prices = [100.0 + i * 20.0 for i in range(warmup)]
+    # Traded region: mild oscillation around the post-warmup level -- no
+    # drift remotely comparable to the warmup move.
+    rest_prices = [1080.0 + 10.0 * np.sin(i / 5.0) for i in range(n - warmup)]
+    close = warmup_prices + rest_prices
+    index = pd.date_range("2026-01-01", periods=n, freq="1h")
+    df = pd.DataFrame({"close": close}, index=index)
+
+    fee = 0.001
+    row = scan_one(df, "BTC/USDT", "1h", "ma", warmup=warmup, splits=2, fee=fee)
+
+    hold = row["net_return"] - row["edge"]
+    expected_hold = buy_and_hold_return(df["close"].iloc[warmup:], fee=fee)
+    bar_zero_hold = buy_and_hold_return(df["close"], fee=fee)
+
+    assert hold == pytest.approx(expected_hold)
+    # The two baselines must differ hugely -- proof this test would have
+    # caught the old bar-0 baseline instead of silently agreeing with it.
+    assert abs(expected_hold - bar_zero_hold) > 1.0
+
+
 def test_scan_one_flags_a_churning_config():
     """Success criterion 3: the 1m config that churned in the live ledger must
     be rejected by a gate, not quietly ranked."""
