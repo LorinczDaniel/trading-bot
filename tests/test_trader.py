@@ -75,3 +75,68 @@ def test_run_replay_returns_per_bar_equity():
     assert len(equity) == 3                      # bars 1, 2, 3 — warmup skips bar 0
     assert list(equity.index) == [1, 2, 3]
     assert all(v == pytest.approx(1000.0) for v in equity)   # never traded
+
+
+def test_run_replay_discriminates_sampling_order_pricing_and_index():
+    """Regression for a review finding: test_run_replay_returns_per_bar_equity
+    above uses HoldStrategy, which never opens a position. With base == 0,
+    PaperBroker.equity(price) == quote regardless of price/timing/index, so
+    that test passes identically even if run_replay (1) sampled equity BEFORE
+    self.step() instead of after, (2) priced off df["close"].iloc[i - 1]
+    instead of iloc[i], or (3) built the index positionally instead of from
+    df.index[i]. This test closes that gap.
+
+    A strategy that BUYs on the very first replayed bar, against a close
+    series that changes on every bar, makes each subsequent equity value
+    depend on both the exact price sampled and exactly when it is sampled
+    relative to the trade. A real DatetimeIndex (via pd.date_range) means a
+    positional index substitute can never accidentally coincide with the
+    real one, unlike the default RangeIndex used elsewhere in this file.
+
+    Price choice: strictly RISING after entry (rather than disabling
+    trailing_stop). RiskConfig's default trailing_stop=True stays live and
+    non-triggering throughout, which is closer to how run_replay is actually
+    exercised than turning the feature off would be.
+
+    Fee choice: a NONZERO broker fee (0.01), deliberately diverging from the
+    "fee=0.0 for clean arithmetic" suggestion. This is forced, not stylistic:
+    for a market order filled and valued at the same price P, equity(P) is
+    exactly conserved when fee == 0 (quote and base just swap in equal
+    value), so sampling equity before vs. after self.step() is mathematically
+    indistinguishable at fee=0 on any bar, including the entry bar. A nonzero
+    fee makes the buy strictly reduce equity(P) by qty*P*fee, giving mutation
+    (1) something observable to fail on.
+    """
+    # close[0], close[1] are warmup bars, never priced or signalled on directly,
+    # but deliberately distinct from close[2] so mutation (2) — pricing off the
+    # previous bar — is caught even on the very first replayed bar.
+    close = [90.0, 95.0, 100.0, 105.0, 110.0, 120.0]
+    df = pd.DataFrame(
+        {"close": close},
+        index=pd.date_range("2024-01-01", periods=len(close), freq="D"),
+    )
+    cash, fee, warmup = 1000.0, 0.01, 2
+    risk_per_trade, stop_loss_pct = 0.01, 0.05  # RiskConfig defaults, restated
+    # explicitly so the expectation below doesn't read them back off the
+    # object under test.
+
+    broker, risk, state, notifier = _make(cash=cash, fee=fee)
+    trader = Trader(
+        "BTC/USDT", broker, Scripted({warmup: "BUY"}), risk, state, notifier, fee=0.0,
+    )
+
+    equity = trader.run_replay(df, warmup=warmup)
+
+    # Independently computed expectation (mirrors, but does not call, the
+    # position_size/place_order logic under test).
+    entry_price = close[warmup]
+    stop = entry_price * (1 - stop_loss_pct)
+    qty = (cash * risk_per_trade) / (entry_price - stop)          # = 2.0
+    remaining_cash = cash - qty * entry_price * (1 + fee)         # broker fee
+    expected = [qty * c + remaining_cash for c in close[warmup:]]
+
+    assert list(equity.index) == list(df.index[warmup:])
+    assert equity.tolist() == pytest.approx(expected)
+    # Sanity: rising prices mean the trailing stop never fires, so the
+    # position opened on the entry bar is still fully open at the end.
+    assert broker.fetch_balance()["base"] == pytest.approx(qty)
