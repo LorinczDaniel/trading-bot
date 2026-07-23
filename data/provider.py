@@ -39,16 +39,25 @@ class MarketDataProvider:
 
     def fetch(self, symbol: str, timeframe: str = "1h", limit: int = 500) -> pd.DataFrame:
         raw = self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-        df = _to_dataframe(raw)
-        os.makedirs(self.cache_dir, exist_ok=True)
-        df.to_parquet(self._cache_path(symbol, timeframe))
-        return df
+        return self._write_cache(symbol, timeframe, _to_dataframe(raw))
 
     def load_cached(self, symbol: str, timeframe: str = "1h") -> pd.DataFrame:
         path = self._cache_path(symbol, timeframe)
         if not os.path.exists(path):
             raise FileNotFoundError(f"No cached data at {path}")
         return pd.read_parquet(path)
+
+    def _write_cache(self, symbol: str, timeframe: str, df: pd.DataFrame) -> pd.DataFrame:
+        """Merge `df` into any existing cache and persist. Never shrinks the file:
+        history accumulates across runs, so a short fetch cannot destroy a long
+        backfill."""
+        path = self._cache_path(symbol, timeframe)
+        os.makedirs(self.cache_dir, exist_ok=True)
+        if os.path.exists(path):
+            df = pd.concat([pd.read_parquet(path), df])
+        df = df[~df.index.duplicated(keep="last")].sort_index()
+        df.to_parquet(path)
+        return df
 
     def backfill(self, symbol: str, timeframe: str = "1h", days: int = 365,
                  page_limit: int = 1000, now_ms: int | None = None) -> pd.DataFrame:
@@ -78,5 +87,4 @@ class MarketDataProvider:
 
         if not rows:
             return _to_dataframe([])
-        df = _to_dataframe(rows)
-        return df[~df.index.duplicated(keep="last")].sort_index()
+        return self._write_cache(symbol, timeframe, _to_dataframe(rows))

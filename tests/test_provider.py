@@ -112,3 +112,35 @@ def test_backfill_on_empty_page_returns_what_it_has(tmp_path):
     prov = MarketDataProvider(EmptyExchange(), cache_dir=str(tmp_path))
     df = prov.backfill("BTC/USDT", "1h", days=5, now_ms=100 * HOUR_MS)
     assert df.empty
+
+
+def test_cache_merge_keeps_older_bars(tmp_path):
+    """A short fetch must never shrink an existing cache."""
+    now = 3000 * HOUR_MS
+    old = FakePagingExchange(_bars(now - 10 * HOUR_MS, 10))
+    prov = MarketDataProvider(old, cache_dir=str(tmp_path))
+    prov.backfill("BTC/USDT", "1h", days=1, now_ms=now)
+
+    # a later, shorter fetch covering only the last 3 bars
+    recent = FakePagingExchange(_bars(now - 3 * HOUR_MS, 3))
+    prov2 = MarketDataProvider(recent, cache_dir=str(tmp_path))
+    prov2.backfill("BTC/USDT", "1h", days=1, now_ms=now)
+
+    merged = prov2.load_cached("BTC/USDT", "1h")
+    assert len(merged) == 10                     # nothing lost
+    assert merged.index.is_monotonic_increasing
+    assert not merged.index.has_duplicates
+
+
+def test_cache_merge_adds_new_bars(tmp_path):
+    now = 3000 * HOUR_MS
+    first = FakePagingExchange(_bars(now - 10 * HOUR_MS, 5))
+    MarketDataProvider(first, cache_dir=str(tmp_path)).backfill(
+        "BTC/USDT", "1h", days=1, now_ms=now)
+
+    second = FakePagingExchange(_bars(now - 6 * HOUR_MS, 6))  # 1 overlap + 5 new
+    MarketDataProvider(second, cache_dir=str(tmp_path)).backfill(
+        "BTC/USDT", "1h", days=1, now_ms=now)
+
+    merged = MarketDataProvider(None, cache_dir=str(tmp_path)).load_cached("BTC/USDT", "1h")
+    assert len(merged) == 10
