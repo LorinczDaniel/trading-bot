@@ -44,3 +44,19 @@ class CsvTradeLog(TradeLog):
         if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
             return
         self.record({"timestamp": timestamp, "side": "start", "equity_after": equity})
+
+
+class MemoryTradeLog(TradeLog):
+    """In-memory sink for simulation. Backtests need trade counts and fee totals
+    but must not touch the ledger directory — a scan runs thousands of sims."""
+
+    def __init__(self):
+        self.rows: list[dict] = []
+
+    def record(self, trade: dict) -> None:
+        self.rows.append(dict(trade))
+
+    def record_start(self, equity: float, timestamp="") -> None:
+        if self.rows:
+            return
+        self.record({"timestamp": timestamp, "side": "start", "equity_after": equity})

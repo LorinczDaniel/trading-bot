@@ -2,7 +2,7 @@ import csv
 
 import pandas as pd
 
-from tradelog import TradeLog, CsvTradeLog
+from tradelog import TradeLog, CsvTradeLog, MemoryTradeLog
 from broker.paper_broker import PaperBroker
 from risk.manager import RiskConfig, RiskManager, RiskState
 from monitoring.notifier import Notifier
@@ -57,3 +57,32 @@ def test_default_trader_has_noop_tradelog():
                     Notifier(echo=False), fee=0.0)
     trader.run_replay(pd.DataFrame({"close": [100.0, 100.0, 100.0, 110.0, 120.0]}), warmup=0)
     assert broker.fetch_balance()["base"] == 0.0       # ran a full round trip cleanly
+
+
+def test_memory_tradelog_collects_rows():
+    log = MemoryTradeLog()
+    log.record_start(1000.0)
+    log.record({"side": "buy", "price": 100.0, "fee": 0.1})
+    log.record({"side": "sell", "price": 110.0, "fee": 0.11, "realized_pnl": 9.79})
+
+    assert len(log.rows) == 3
+    assert log.rows[0]["side"] == "start"
+    assert log.rows[0]["equity_after"] == 1000.0
+    assert log.rows[2]["realized_pnl"] == 9.79
+
+
+def test_memory_tradelog_start_is_written_once():
+    log = MemoryTradeLog()
+    log.record_start(1000.0)
+    log.record_start(9999.0)
+    assert len(log.rows) == 1
+    assert log.rows[0]["equity_after"] == 1000.0
+
+
+def test_memory_tradelog_copies_the_row():
+    """Recording must snapshot, so a caller mutating its dict cannot rewrite history."""
+    log = MemoryTradeLog()
+    row = {"side": "buy", "price": 100.0}
+    log.record(row)
+    row["price"] = 999.0
+    assert log.rows[0]["price"] == 100.0
