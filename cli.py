@@ -10,6 +10,7 @@ from strategies.factory import build_strategy, walk_forward_grid, STRATEGY_NAMES
 from backtest.simulate import simulate, scan_risk_config, live_risk_config
 from backtest.metrics import total_return, max_drawdown, sharpe_ratio, buy_and_hold_return
 from backtest.walkforward import walk_forward
+from backtest.scan import scan_one, rank, format_table
 from broker.base import Order
 from broker.paper_broker import PaperBroker
 from broker.ccxt_broker import CcxtBroker
@@ -115,6 +116,49 @@ def cmd_walkforward(args):
             f"         Fetch more data (fetch --days), use fewer --splits, "
             f"or a smaller --trend-sma."
         )
+
+
+def cmd_scan(args):
+    import time
+
+    prov = MarketDataProvider(exchange=None)
+    timeframes = [t.strip() for t in args.timeframes.split(",") if t.strip()]
+    strategies = [s.strip() for s in args.strategies.split(",") if s.strip()]
+
+    rows, skipped = [], []
+    for tf in timeframes:
+        try:
+            df = prov.load_cached(args.symbol, tf)
+        except FileNotFoundError:
+            skipped.append(f"{tf} (no cached data — run: fetch --timeframe {tf} --days N)")
+            continue
+        for name in strategies:
+            started = time.time()
+            row = scan_one(df, args.symbol, tf, name, cash=args.cash, fee=args.fee,
+                           warmup=args.warmup, risk_per_trade=args.risk,
+                           stop_loss_pct=args.stop, splits=args.splits,
+                           trend_sma=args.trend_sma)
+            rows.append(row)
+            print(f"  scanned {name} {tf} in {time.time() - started:.1f}s", flush=True)
+
+    if not rows:
+        raise SystemExit("Nothing to scan. " + "; ".join(skipped))
+
+    print()
+    print(format_table(rank(rows)))
+    print()
+    passing = [r for r in rows if r["verdict"] == "PASS"]
+    if passing:
+        best = max(passing, key=lambda r: r["edge"])
+        print(f"{len(passing)}/{len(rows)} configurations passed. "
+              f"Best by edge: {best['strategy']} on {best['timeframe']} "
+              f"({best['edge']:+.2%} vs buy & hold).")
+    else:
+        print(f"0/{len(rows)} configurations passed. That is a finding, not a bug: "
+              f"no tested configuration is worth soaking. Do not loosen the "
+              f"thresholds to manufacture a winner.")
+    for note in skipped:
+        print(f"SKIPPED {note}")
 
 
 def _ledger_path(mode, symbol, timeframe):
@@ -344,6 +388,21 @@ def build_parser():
     _add_strategy_args(w)
     w.add_argument("--splits", type=int, default=4)
     w.set_defaults(func=cmd_walkforward)
+
+    sc = sub.add_parser("scan", help="rank strategy/timeframe configurations against the gates")
+    sc.add_argument("--symbol", default="BTC/USDT")
+    sc.add_argument("--timeframes", default="1h,4h",
+                    help="comma-separated, e.g. 1h,4h,3m,1m (needs cached data for each)")
+    sc.add_argument("--strategies", default=",".join(STRATEGY_NAMES),
+                    help="comma-separated subset of " + ",".join(STRATEGY_NAMES))
+    sc.add_argument("--trend-sma", type=int, default=200)
+    sc.add_argument("--splits", type=int, default=4)
+    sc.add_argument("--cash", type=float, default=10_000.0)
+    sc.add_argument("--fee", type=float, default=0.001)
+    sc.add_argument("--risk", type=float, default=0.01)
+    sc.add_argument("--stop", type=float, default=0.05)
+    sc.add_argument("--warmup", type=int, default=50)
+    sc.set_defaults(func=cmd_scan)
 
     r = sub.add_parser("run", help="run the bot in PAPER mode over cached candles (no real orders)")
     r.add_argument("--symbol", default="BTC/USDT")

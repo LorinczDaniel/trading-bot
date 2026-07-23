@@ -103,3 +103,54 @@ def test_boundaries_are_inclusive_where_the_spec_says_so():
     assert verdict(_passing_row(trades=MIN_TRADES)) == ("PASS", "")
     assert verdict(_passing_row(trades_per_day=MAX_TRADES_PER_DAY)) == ("PASS", "")
     assert verdict(_passing_row(fee_drag=MAX_FEE_DRAG)) == ("PASS", "")
+
+
+from backtest.scan import rank, format_table
+
+
+def _row(strategy, v, reason="", edge=0.0):
+    return {"symbol": "BTC/USDT", "timeframe": "1h", "strategy": strategy,
+            "bars": 1000, "days": 41.7, "trades": 50, "trades_per_day": 1.2,
+            "net_return": 0.05, "edge": edge, "max_drawdown": -0.08,
+            "worst_loss": 0.03, "fee_drag": 0.1, "avg_is": 0.1, "avg_oos": 0.05,
+            "oos_gap": 0.05, "folds_traded": 3, "verdict": v, "reason": reason}
+
+
+def test_rank_puts_passing_configs_first_by_edge():
+    rows = [_row("ma", "FAIL", "churn"),
+            _row("rsi", "PASS", edge=0.01),
+            _row("rsi+trend", "PASS", edge=0.09)]
+    ranked = rank(rows)
+    assert [r["strategy"] for r in ranked] == ["rsi+trend", "rsi", "ma"]
+
+
+def test_rank_keeps_failures_rather_than_dropping_them():
+    """Knowing why a config was rejected is the point of the output."""
+    rows = [_row("ma", "FAIL", "churn"), _row("rsi", "FAIL", "fee-drag")]
+    assert len(rank(rows)) == 2
+
+
+def test_format_table_shows_the_failure_reason():
+    out = format_table([_row("ma", "FAIL", "churn")])
+    assert "churn" in out
+    assert "ma" in out
+    assert "BTC/USDT" in out
+
+
+def test_scan_one_flags_a_churning_config():
+    """Success criterion 3: the 1m config that churned in the live ledger must
+    be rejected by a gate, not quietly ranked."""
+    import numpy as np
+    from backtest.scan import scan_one
+
+    n = 3000
+    # 1-minute bars of pure noise: crossovers fire constantly, nothing trends
+    rng = np.random.default_rng(0)
+    close = 65_000 + np.cumsum(rng.normal(0, 5, n))
+    index = pd.date_range("2026-07-01", periods=n, freq="1min")
+    df = pd.DataFrame({"close": close}, index=index)
+
+    row = scan_one(df, "BTC/USDT", "1m", "ma", warmup=60, splits=2)
+
+    assert row["verdict"] == "FAIL"
+    assert row["reason"] in ("churn", "fee-drag", "too-few-trades", "insufficient-folds")

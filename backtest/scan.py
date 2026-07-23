@@ -7,6 +7,11 @@ a configuration failed is the output's main value.
 
 import pandas as pd
 
+from backtest.metrics import total_return, max_drawdown, buy_and_hold_return
+from backtest.simulate import simulate, scan_risk_config
+from backtest.walkforward import walk_forward
+from strategies.factory import build_strategy, walk_forward_grid
+
 
 def total_fees(fills: list) -> float:
     """Sum the fee column, tolerating blank entries from ledger-shaped rows."""
@@ -82,3 +87,86 @@ def verdict(row: dict) -> tuple[str, str]:
     if row["avg_is"] > 0 and row["avg_oos"] < 0:
         return "FAIL", "overfit"
     return "PASS", ""
+
+
+def scan_one(df, symbol: str, timeframe: str, strategy_name: str, *,
+             cash: float = 10_000.0, fee: float = 0.001, warmup: int = 50,
+             risk_per_trade: float = 0.01, stop_loss_pct: float = 0.05,
+             splits: int = 4, trend_sma: int = 200) -> dict:
+    """Measure one (strategy, timeframe) configuration and return its scan row."""
+    config = scan_risk_config(risk_per_trade=risk_per_trade, stop_loss_pct=stop_loss_pct)
+    strategy = build_strategy(strategy_name, trend_sma=trend_sma)
+    res = simulate(df, strategy, config, cash=cash, fee=fee, warmup=warmup)
+
+    net = total_return(res.equity) if len(res.equity) else 0.0
+    hold = buy_and_hold_return(df["close"], fee=fee)
+
+    try:
+        grid, make_strategy = walk_forward_grid(strategy_name, trend_sma=trend_sma)
+        folds = walk_forward(df, make_strategy, grid, n_splits=splits,
+                             initial_cash=cash, fee=fee, warmup=warmup,
+                             risk_config=config)
+    except ValueError:
+        folds = []          # not enough data to split at all
+    traded = [f for f in folds if f["valid"] and f["oos_trades"] > 0]
+    avg_is = sum(f["in_sample_return"] for f in traded) / len(traded) if traded else 0.0
+    avg_oos = sum(f["oos_return"] for f in traded) / len(traded) if traded else 0.0
+
+    span_days = 0.0
+    if len(df.index) >= 2:
+        span_days = (pd.Timestamp(df.index[-1]) - pd.Timestamp(df.index[0])).total_seconds() / 86_400.0
+
+    row = {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "strategy": strategy_name,
+        "bars": len(df),
+        "days": span_days,
+        "trades": len(res.trades),
+        "trades_per_day": trades_per_day(len(res.trades), df.index),
+        "net_return": net,
+        "edge": net - hold,
+        "max_drawdown": max_drawdown(res.equity) if len(res.equity) else 0.0,
+        "worst_loss": worst_cumulative_loss(res.trades, cash),
+        "fee_drag": fee_drag(res.fills, res.trades),
+        "avg_is": avg_is,
+        "avg_oos": avg_oos,
+        "oos_gap": avg_is - avg_oos,
+        "folds_traded": len(traded),
+    }
+    row["verdict"], row["reason"] = verdict(row)
+    return row
+
+
+def rank(rows: list) -> list:
+    """Passing configurations first, best edge first. Failures follow, grouped by
+    reason — they are kept, never dropped: a named rejection is information."""
+    passing = sorted([r for r in rows if r["verdict"] == "PASS"],
+                     key=lambda r: r["edge"], reverse=True)
+    failing = sorted([r for r in rows if r["verdict"] != "PASS"],
+                     key=lambda r: (r["reason"], r["strategy"], r["timeframe"]))
+    return passing + failing
+
+
+def _fmt(value: float, spec: str) -> str:
+    if value == float("inf"):
+        return "inf"
+    return format(value, spec)
+
+
+def format_table(rows: list) -> str:
+    header = (f"{'symbol':<10} {'tf':>4} {'strategy':<10} {'bars':>6} {'days':>6} "
+              f"{'trades':>6} {'tr/day':>7} {'net':>8} {'edge':>8} {'maxDD':>7} "
+              f"{'worst':>7} {'feedrag':>8} {'oosgap':>8} {'folds':>5}  verdict")
+    lines = [header, "-" * len(header)]
+    for r in rows:
+        tag = r["verdict"] if r["verdict"] == "PASS" else f"FAIL {r['reason']}"
+        lines.append(
+            f"{r['symbol']:<10} {r['timeframe']:>4} {r['strategy']:<10} "
+            f"{r['bars']:>6} {r['days']:>6.1f} {r['trades']:>6} "
+            f"{_fmt(r['trades_per_day'], '>7.2f')} {r['net_return']:>7.2%} "
+            f"{r['edge']:>+7.2%} {r['max_drawdown']:>6.1%} {r['worst_loss']:>6.1%} "
+            f"{_fmt(r['fee_drag'], '>8.2f')} {r['oos_gap']:>+7.2%} "
+            f"{r['folds_traded']:>5}  {tag}"
+        )
+    return "\n".join(lines)
