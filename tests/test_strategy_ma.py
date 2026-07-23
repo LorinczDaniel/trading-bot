@@ -33,3 +33,8 @@ def test_hold_when_not_enough_data():
     sig = MACrossover(fast=2, slow=3).generate(_df([1, 2, 3]))
     assert sig.action == "HOLD"
     assert "not enough data" in sig.reason
+
+
+def test_ma_lookback_covers_the_previous_bar():
+    # generate() reads fast.iloc[-2], so slow bars alone are not enough
+    assert MACrossover(fast=10, slow=30).lookback == 31

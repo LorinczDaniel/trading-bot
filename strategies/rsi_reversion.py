@@ -13,6 +13,10 @@ class RSIReversion(Strategy):
         self.low = low
         self.high = high
 
+    @property
+    def lookback(self) -> int:
+        return self.period + 1   # close.diff() consumes one bar
+
     def _rsi(self, close: pd.Series) -> float:
         delta = close.diff()
         gain = delta.clip(lower=0)

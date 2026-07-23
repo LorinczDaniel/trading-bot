@@ -13,6 +13,10 @@ class TrendFilter(Strategy):
         self.inner = inner
         self.sma_period = sma_period
 
+    @property
+    def lookback(self) -> int:
+        return max(self.inner.lookback, self.sma_period)
+
     def generate(self, df: pd.DataFrame) -> Signal:
         signal = self.inner.generate(df)
         if signal.action != "BUY":

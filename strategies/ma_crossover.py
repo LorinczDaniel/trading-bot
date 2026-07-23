@@ -10,6 +10,10 @@ class MACrossover(Strategy):
         self.fast = fast
         self.slow = slow
 
+    @property
+    def lookback(self) -> int:
+        return self.slow + 1   # generate() reads the previous bar's averages too
+
     def generate(self, df: pd.DataFrame) -> Signal:
         if len(df) < self.slow + 1:
             return Signal("HOLD", reason="not enough data")

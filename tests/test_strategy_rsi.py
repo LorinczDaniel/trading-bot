@@ -35,3 +35,8 @@ def test_hold_when_not_enough_data():
     sig = RSIReversion(period=14).generate(_df([1, 2, 3, 4, 5]))
     assert sig.action == "HOLD"
     assert "not enough data" in sig.reason
+
+
+def test_rsi_lookback_accounts_for_diff():
+    # _rsi() calls close.diff(), which consumes one bar
+    assert RSIReversion(period=14).lookback == 15

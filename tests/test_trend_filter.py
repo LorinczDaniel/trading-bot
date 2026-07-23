@@ -1,6 +1,7 @@
 import pandas as pd
 
 from strategies.base import Strategy, Signal
+from strategies.ma_crossover import MACrossover
 from strategies.trend_filter import TrendFilter
 
 
@@ -41,3 +42,12 @@ def test_hold_passes_through():
 def test_buy_suppressed_when_not_enough_data():
     strat = TrendFilter(StubStrategy("BUY"), sma_period=200)
     assert strat.generate(_df([1, 2, 3])).action == "HOLD"
+
+
+def test_trend_filter_lookback_is_the_larger_requirement():
+    assert TrendFilter(MACrossover(10, 30), sma_period=200).lookback == 200
+    assert TrendFilter(MACrossover(10, 300), sma_period=200).lookback == 301
+
+
+def test_base_strategy_has_a_safe_default_lookback():
+    assert Strategy().lookback >= 200
