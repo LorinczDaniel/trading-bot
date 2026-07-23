@@ -122,6 +122,8 @@ def test_cache_merge_keeps_older_bars(tmp_path):
     prov.backfill("BTC/USDT", "1h", days=1, now_ms=now)
 
     # a later, shorter fetch covering only the last 3 bars
+    # First fetch at now-3..now-1 has closes [103.0, 104.0, 105.0]
+    # Second fetch at now-3..now-1 has closes [100.0, 101.0, 102.0]
     recent = FakePagingExchange(_bars(now - 3 * HOUR_MS, 3))
     prov2 = MarketDataProvider(recent, cache_dir=str(tmp_path))
     prov2.backfill("BTC/USDT", "1h", days=1, now_ms=now)
@@ -130,6 +132,15 @@ def test_cache_merge_keeps_older_bars(tmp_path):
     assert len(merged) == 10                     # nothing lost
     assert merged.index.is_monotonic_increasing
     assert not merged.index.has_duplicates
+
+    # Verify newest bars win on overlaps: the 3 overlapping bars should have
+    # values from the second (recent) fetch, not the first (old) fetch
+    overlap_ts_1 = pd.to_datetime(now - 3 * HOUR_MS, unit="ms")
+    overlap_ts_2 = pd.to_datetime(now - 2 * HOUR_MS, unit="ms")
+    overlap_ts_3 = pd.to_datetime(now - 1 * HOUR_MS, unit="ms")
+    assert merged.loc[overlap_ts_1, "close"] == 100.0  # newest wins
+    assert merged.loc[overlap_ts_2, "close"] == 101.0
+    assert merged.loc[overlap_ts_3, "close"] == 102.0
 
 
 def test_cache_merge_adds_new_bars(tmp_path):
@@ -144,3 +155,12 @@ def test_cache_merge_adds_new_bars(tmp_path):
 
     merged = MarketDataProvider(None, cache_dir=str(tmp_path)).load_cached("BTC/USDT", "1h")
     assert len(merged) == 10
+    assert merged.index.is_monotonic_increasing
+    assert not merged.index.has_duplicates
+
+    # Verify newest bar wins on the overlap at now-6*HOUR_MS:
+    # First fetch at this ts has close=104.0
+    # Second fetch at this ts has close=100.0 (latest revision)
+    # Merged should prefer the second (newest) value
+    overlap_ts = pd.to_datetime(now - 6 * HOUR_MS, unit="ms")
+    assert merged.loc[overlap_ts, "close"] == 100.0
