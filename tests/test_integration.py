@@ -2,7 +2,7 @@ import pandas as pd
 
 from data.provider import MarketDataProvider
 from strategies.ma_crossover import MACrossover
-from backtest.engine import run_backtest
+from backtest.simulate import simulate
 from backtest.metrics import total_return, max_drawdown
 
 
@@ -19,10 +19,12 @@ def test_fetch_then_backtest_end_to_end(tmp_path):
     prov.fetch("BTC/USDT", "1h", limit=60)
     df = prov.load_cached("BTC/USDT", "1h")
 
-    res = run_backtest(df, MACrossover(fast=5, slow=10), initial_cash=1000.0, fee=0.001, warmup=10)
+    res = simulate(df, MACrossover(fast=5, slow=10), cash=1000.0, fee=0.001, warmup=10)
 
     assert isinstance(res.equity, pd.Series)
-    assert len(res.equity) == 60
+    # simulate/run_replay only emits equity for bars after warmup, unlike the
+    # retired engine.run_backtest which recorded equity for every bar.
+    assert len(res.equity) == len(df) - 10
     assert res.final_equity > 0
     # metrics compute without error
     assert isinstance(total_return(res.equity), float)

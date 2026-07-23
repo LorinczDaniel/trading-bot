@@ -81,9 +81,12 @@ def cmd_walkforward(args):
     df = prov.load_cached(args.symbol, args.timeframe)
     grid, make_strategy = walk_forward_grid(args.strategy, trend_sma=args.trend_sma)
     results = walk_forward(df, make_strategy, grid, n_splits=args.splits)
-    traded = [r for r in results if r["oos_trades"] > 0]
+    traded = [r for r in results if r["valid"] and r["oos_trades"] > 0]
     print(f"Strategy: {args.strategy}")
     for r in results:
+        if not r["valid"]:
+            print(f"fold {r['fold']}: no parameter set made enough trades to judge")
+            continue
         oos = f"{r['oos_return']:+.2%}" if r["oos_trades"] > 0 else "n/a (0 trades)"
         print(
             f"fold {r['fold']}: best params {str(r['best_params']):>16}"
@@ -102,8 +105,9 @@ def cmd_walkforward(args):
     if len(traded) < len(results):
         print(
             f"WARNING: {len(results) - len(traded)}/{len(results)} folds made 0 trades "
-            f"(fold too short for the strategy's lookback).\n"
-            f"         Fetch more data, use fewer --splits, or a smaller --trend-sma."
+            f"or had no valid parameters.\n"
+            f"         Fetch more data (fetch --days), use fewer --splits, "
+            f"or a smaller --trend-sma."
         )
 
 
