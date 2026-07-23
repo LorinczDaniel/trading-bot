@@ -55,7 +55,8 @@ from backtest.scan import verdict, MIN_TRADES, MAX_TRADES_PER_DAY, MAX_FEE_DRAG
 
 def _passing_row(**overrides):
     row = {"trades": 50, "trades_per_day": 0.5, "fee_drag": 0.05,
-           "folds_traded": 3, "avg_is": 0.10, "avg_oos": 0.04}
+           "folds_traded": 3, "avg_is": 0.10, "avg_oos": 0.04,
+           "net_return": 0.05}
     row.update(overrides)
     return row
 
@@ -97,6 +98,29 @@ def test_overfit_fails_when_profit_does_not_survive_out_of_sample():
 def test_losing_in_sample_is_not_overfit():
     """Bad in both halves is honest failure, not curve-fitting."""
     assert verdict(_passing_row(avg_is=-0.10, avg_oos=-0.05)) == ("PASS", "")
+
+
+def test_losing_fails_when_an_otherwise_clean_config_makes_no_money():
+    """Gate 6 (added 2026-07-23): net_return <= 0 fails even though every
+    other gate is clear."""
+    assert verdict(_passing_row(net_return=-0.01)) == ("FAIL", "losing")
+
+
+def test_positive_net_return_still_passes():
+    """A profitable, otherwise-clean config is unaffected by the new gate."""
+    assert verdict(_passing_row(net_return=0.02)) == ("PASS", "")
+
+
+def test_overfit_is_reported_before_losing():
+    """A config that is both overfit and losing must report `overfit` — this
+    pins gate 6 as strictly last, after `overfit`, not before it."""
+    row = _passing_row(avg_is=0.20, avg_oos=-0.05, net_return=-0.01)
+    assert verdict(row) == ("FAIL", "overfit")
+
+
+def test_breakeven_net_return_fails_the_losing_gate():
+    """Pins the exact condition as `<= 0`, not `< 0`: breakeven is a fail."""
+    assert verdict(_passing_row(net_return=0.0)) == ("FAIL", "losing")
 
 
 def test_boundaries_are_inclusive_where_the_spec_says_so():

@@ -86,6 +86,15 @@ def verdict(row: dict) -> tuple[str, str]:
         return "FAIL", "insufficient-folds"
     if row["avg_is"] > 0 and row["avg_oos"] < 0:
         return "FAIL", "overfit"
+    # Gate 6, added 2026-07-23 by owner decision, after the first real scan
+    # surfaced `1h rsi+trend` (edge +43.51%, net_return -1.16%) — a config
+    # that only "beat" buy-and-hold because BTC fell harder over the sample.
+    # A losing configuration is not deployable however well it beat holding.
+    # Placed last: a config is labelled `losing` only once every more
+    # fundamental gate above has already been cleared. See the dated
+    # amendment in docs/superpowers/specs/2026-07-23-measurement-harness-design.md.
+    if row["net_return"] <= 0:
+        return "FAIL", "losing"
     return "PASS", ""
 
 

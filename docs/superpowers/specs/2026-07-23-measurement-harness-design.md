@@ -221,11 +221,46 @@ fold could latch off partway through, and its out-of-sample return would measure
 "halted early" rather than true edge.
 | Fold coverage | at least 2 walk-forward folds traded | `insufficient-folds` |
 | Overfit | fails when `avg_is > 0` **and** `avg_oos < 0` | `overfit` |
+| Losing | fails when `net_return <= 0` | `losing` |
 
 A configuration failing any gate is reported as FAIL with its label; it is not
 silently dropped, because knowing *why* a configuration was rejected is the
 output's main value. Survivors rank by **edge vs buy & hold, net of fees**,
 descending.
+
+### Amendment — 2026-07-23: `losing` gate added after the first real scan
+
+The "Gates" section above states thresholds are fixed before any results are
+seen, and that changing one afterward is post-hoc rationalization. This
+amendment happens **after** the first real scan ran. The row was added to the
+table above so the gate list stays a single source of truth, but its
+provenance is disclosed here, not presented as if it had been part of the
+original pre-committed set.
+
+**What changed:** a sixth gate, `net_return > 0`, was added to `verdict`, by
+owner decision. Failure label: `losing`. It is checked last, after `overfit`
+— a configuration is reported by its most fundamental defect first (too few
+trades, churn, cost, thin folds, curve-fitting), and only labelled `losing`
+if it is otherwise sound and still fails to make money.
+
+**Why this does not reopen the pre-commitment question:** the failure the
+pre-commitment guards against is *loosening* a threshold once it is
+inconvenient — moving a boundary so a configuration that would have failed
+now passes. This is the opposite: a strict tightening. A tightening cannot
+manufacture a passing configuration; it can only turn a PASS into a FAIL. The
+mechanism the gates exist to prevent does not apply here.
+
+**Why it was needed:** the first real scan surfaced `1h rsi+trend` — edge
+`+43.51%`, `net_return -1.16%`. It "beat" buy-and-hold only because BTC fell
+roughly 44% over the sample period, so it merely lost money more slowly than
+holding did. Ranking survivors by `edge` alone would have crowned a
+money-losing configuration as "best," and this scan's output feeds a decision
+to run a bot with real money. A configuration that loses money is not
+deployable however well it beat holding.
+
+**Effect on the delivered result: none.** 0 of 16 configurations cleared the
+original five gates, so none reaches the sixth. The 0/16 finding stands
+unchanged; `losing` governs future scans, not this one.
 
 ### Optimizer gate
 
