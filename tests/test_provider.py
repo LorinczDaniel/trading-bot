@@ -122,7 +122,7 @@ def test_cache_merge_keeps_older_bars(tmp_path):
     prov.backfill("BTC/USDT", "1h", days=1, now_ms=now)
 
     # a later, shorter fetch covering only the last 3 bars
-    # First fetch at now-3..now-1 has closes [103.0, 104.0, 105.0]
+    # First fetch at now-3..now-1 has closes [107.0, 108.0, 109.0]
     # Second fetch at now-3..now-1 has closes [100.0, 101.0, 102.0]
     recent = FakePagingExchange(_bars(now - 3 * HOUR_MS, 3))
     prov2 = MarketDataProvider(recent, cache_dir=str(tmp_path))

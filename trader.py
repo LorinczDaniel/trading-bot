@@ -103,7 +103,9 @@ class Trader:
         Only the tail of the history is passed to the strategy. Indicators read
         the last value of a rolling window, so a window of `lookback + buffer`
         gives identical signals while keeping the replay linear in bar count
-        instead of quadratic.
+        instead of quadratic. This assumes indicators are computed over a fixed
+        trailing window (`.rolling`); a recursive accumulator (`ewm`,
+        `expanding`) depends on full history and would need special-casing here.
         """
         window = getattr(self.strategy, "lookback", 200) + 10
         equity, index = [], []

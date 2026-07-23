@@ -108,7 +108,17 @@ def cmd_walkforward(args):
         print(f"AVG out-of-sample:  {avg_oos:+.2%}")
         print(f"Overfitting gap:    {avg_is - avg_oos:+.2%}  (big gap => curve-fit, not real edge)")
     else:
-        print("No fold produced any trades — nothing to measure.")
+        invalid = [r for r in results if not r["valid"]]
+        if len(invalid) == len(results):
+            print("No fold had a parameter set that cleared the minimum trade "
+                  "count — nothing to measure.")
+        elif invalid:
+            print(f"Nothing to measure: {len(invalid)}/{len(results)} folds had no "
+                  f"parameter set that cleared the minimum trade count, and the "
+                  f"rest traded in-sample but made 0 out-of-sample trades.")
+        else:
+            print("Every fold traded in-sample but made 0 out-of-sample trades — "
+                  "nothing to measure.")
     if len(traded) < len(results):
         print(
             f"WARNING: {len(results) - len(traded)}/{len(results)} folds made 0 trades "
@@ -152,7 +162,7 @@ def cmd_scan(args):
         best = max(passing, key=lambda r: r["edge"])
         print(f"{len(passing)}/{len(rows)} configurations passed. "
               f"Best by edge: {best['strategy']} on {best['timeframe']} "
-              f"({best['edge']:+.2%} vs buy & hold).")
+              f"(edge {best['edge']:+.2%} vs buy & hold, net {best['net_return']:+.2%}).")
     else:
         print(f"0/{len(rows)} configurations passed. That is a finding, not a bug: "
               f"no tested configuration is worth soaking. Do not loosen the "

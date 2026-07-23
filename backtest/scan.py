@@ -101,8 +101,8 @@ def scan_one(df, symbol: str, timeframe: str, strategy_name: str, *,
     net = total_return(res.equity) if len(res.equity) else 0.0
     hold = buy_and_hold_return(df["close"], fee=fee)
 
+    grid, make_strategy = walk_forward_grid(strategy_name, trend_sma=trend_sma)
     try:
-        grid, make_strategy = walk_forward_grid(strategy_name, trend_sma=trend_sma)
         folds = walk_forward(df, make_strategy, grid, n_splits=splits,
                              initial_cash=cash, fee=fee, warmup=warmup,
                              risk_config=config)
@@ -148,25 +148,34 @@ def rank(rows: list) -> list:
     return passing + failing
 
 
-def _fmt(value: float, spec: str) -> str:
-    if value == float("inf"):
-        return "inf"
-    return format(value, spec)
-
-
 def format_table(rows: list) -> str:
-    header = (f"{'symbol':<10} {'tf':>4} {'strategy':<10} {'bars':>6} {'days':>6} "
-              f"{'trades':>6} {'tr/day':>7} {'net':>8} {'edge':>8} {'maxDD':>7} "
-              f"{'worst':>7} {'feedrag':>8} {'oosgap':>8} {'folds':>5}  verdict")
+    """Render scan rows as an aligned table.
+
+    `days` and `trades_per_day` are printed at higher precision than the other
+    columns on purpose: `trades_per_day` sits right at the churn gate boundary
+    in real data (e.g. 6.0004 vs a 6.0 ceiling), and rounding either column
+    toward the passing side would make a genuine FAIL look like an arithmetic
+    PASS. `avgIS`/`avgOOS` are printed (rather than just their gap) so the
+    `overfit` gate's condition (`avg_is > 0 and avg_oos < 0`) can be checked
+    directly against the row that failed it.
+
+    `format(float("inf"), spec)` already pads correctly under a float spec —
+    used directly here (no wrapper) so the "fee_drag = inf" row keeps its
+    column width instead of collapsing to a bare "inf" and shifting every
+    later column.
+    """
+    header = (f"{'symbol':<10} {'tf':>4} {'strategy':<10} {'bars':>6} {'days':>8} "
+              f"{'trades':>6} {'tr/day':>9} {'net':>8} {'edge':>8} {'maxDD':>7} "
+              f"{'worst':>7} {'feedrag':>8} {'avgIS':>8} {'avgOOS':>8} {'folds':>5}  verdict")
     lines = [header, "-" * len(header)]
     for r in rows:
         tag = r["verdict"] if r["verdict"] == "PASS" else f"FAIL {r['reason']}"
         lines.append(
             f"{r['symbol']:<10} {r['timeframe']:>4} {r['strategy']:<10} "
-            f"{r['bars']:>6} {r['days']:>6.1f} {r['trades']:>6} "
-            f"{_fmt(r['trades_per_day'], '>7.2f')} {r['net_return']:>7.2%} "
-            f"{r['edge']:>+7.2%} {r['max_drawdown']:>6.1%} {r['worst_loss']:>6.1%} "
-            f"{_fmt(r['fee_drag'], '>8.2f')} {r['oos_gap']:>+7.2%} "
+            f"{r['bars']:>6} {r['days']:>8.3f} {r['trades']:>6} "
+            f"{r['trades_per_day']:>9.4f} {r['net_return']:>8.2%} "
+            f"{r['edge']:>+8.2%} {r['max_drawdown']:>7.1%} {r['worst_loss']:>7.1%} "
+            f"{r['fee_drag']:>8.2f} {r['avg_is']:>+8.2%} {r['avg_oos']:>+8.2%} "
             f"{r['folds_traded']:>5}  {tag}"
         )
     return "\n".join(lines)

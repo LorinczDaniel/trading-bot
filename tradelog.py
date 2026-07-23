@@ -57,6 +57,8 @@ class MemoryTradeLog(TradeLog):
         self.rows.append(dict(trade))
 
     def record_start(self, equity: float, timestamp="") -> None:
+        """Same baseline-'start'-row rationale as `CsvTradeLog.record_start`,
+        just gated on an empty in-memory list instead of an empty file."""
         if self.rows:
             return
         self.record({"timestamp": timestamp, "side": "start", "equity_after": equity})

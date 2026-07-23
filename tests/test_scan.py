@@ -137,6 +137,32 @@ def test_format_table_shows_the_failure_reason():
     assert "BTC/USDT" in out
 
 
+def test_format_table_stays_aligned_when_fee_drag_is_infinite():
+    """fee_drag=inf is the documented worst case (fees paid, zero gross P&L).
+    format(float("inf"), spec) pads correctly under a float spec; a row must
+    not shift every later column by rendering a bare unpadded "inf" instead."""
+    finite = _row("ma", "FAIL", "fee-drag")
+    finite["fee_drag"] = 0.12
+    infinite = _row("ma", "FAIL", "fee-drag")
+    infinite["fee_drag"] = float("inf")
+
+    out = format_table([finite, infinite])
+    lines = out.splitlines()
+    finite_line, infinite_line = lines[2], lines[3]
+
+    # Only fee_drag differs between the two rows, so an aligned table must
+    # produce two lines of identical length.
+    assert len(infinite_line) == len(finite_line)
+    # The inf cell must occupy its full 8-char column width (padded, like
+    # Python's own float formatting), not collapse to a bare 3-char "inf"
+    # that would shift every column after it.
+    assert "     inf" in infinite_line
+    # Everything after the feedrag column (avgIS onward) must land in the
+    # same place on both lines — proof the shift didn't happen.
+    assert infinite_line[infinite_line.index("     inf") + 8:] == \
+        finite_line[finite_line.index("0.12") + 4:]
+
+
 def test_scan_one_flags_a_churning_config():
     """Success criterion 3: the 1m config that churned in the live ledger must
     be rejected by a gate, not quietly ranked."""
@@ -153,4 +179,4 @@ def test_scan_one_flags_a_churning_config():
     row = scan_one(df, "BTC/USDT", "1m", "ma", warmup=60, splits=2)
 
     assert row["verdict"] == "FAIL"
-    assert row["reason"] in ("churn", "fee-drag", "too-few-trades", "insufficient-folds")
+    assert row["reason"] == "churn"
