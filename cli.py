@@ -59,6 +59,12 @@ def cmd_backtest(args):
     config = make_config(risk_per_trade=args.risk, stop_loss_pct=args.stop)
     res = simulate(df, strategy, config, cash=args.cash, fee=args.fee, warmup=args.warmup)
 
+    if len(res.equity) == 0:
+        raise SystemExit(
+            f"--warmup {args.warmup} leaves no bars to replay "
+            f"({args.symbol} {args.timeframe} has {len(df)} bars). Use a smaller --warmup."
+        )
+
     strat_ret = total_return(res.equity)
     hold_ret = buy_and_hold_return(df["close"])
     edge = strat_ret - hold_ret
