@@ -99,10 +99,17 @@ class Trader:
         Returns equity after each replayed bar. The per-bar curve is what
         drawdown and Sharpe are computed from — the trade ledger only records
         equity at fills, which is too sparse to measure a drawdown.
+
+        Only the tail of the history is passed to the strategy. Indicators read
+        the last value of a rolling window, so a window of `lookback + buffer`
+        gives identical signals while keeping the replay linear in bar count
+        instead of quadratic.
         """
+        window = getattr(self.strategy, "lookback", 200) + 10
         equity, index = [], []
         for i in range(warmup, len(df)):
-            self.step(df.iloc[: i + 1])
+            start = max(0, i + 1 - window)
+            self.step(df.iloc[start : i + 1])
             equity.append(self.broker.equity(float(df["close"].iloc[i])))
             index.append(df.index[i])
         return pd.Series(equity, index=index, dtype="float64")

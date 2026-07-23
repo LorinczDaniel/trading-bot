@@ -140,3 +140,40 @@ def test_run_replay_discriminates_sampling_order_pricing_and_index():
     # Sanity: rising prices mean the trailing stop never fires, so the
     # position opened on the entry bar is still fully open at the end.
     assert broker.fetch_balance()["base"] == pytest.approx(qty)
+
+
+def _replay_unbounded(df, strategy, cash=10_000.0, fee=0.001, warmup=50):
+    """Reference implementation: always passes the full prefix."""
+    broker = PaperBroker(cash=cash, fee=fee)
+    trader = Trader(
+        "BTC/USDT", broker, strategy, RiskManager(RiskConfig()),
+        RiskState(cash), Notifier(echo=False), fee=fee,
+    )
+    equity, index = [], []
+    for i in range(warmup, len(df)):
+        trader.step(df.iloc[: i + 1])
+        equity.append(broker.equity(float(df["close"].iloc[i])))
+        index.append(df.index[i])
+    return pd.Series(equity, index=index, dtype="float64")
+
+
+def test_bounded_window_matches_unbounded_replay():
+    import numpy as np
+    from strategies.ma_crossover import MACrossover
+
+    # deterministic wave with enough swings to trigger repeated crossovers
+    n = 600
+    close = 100 + 10 * np.sin(np.arange(n) / 7.0) + np.arange(n) * 0.02
+    df = pd.DataFrame({"close": close})
+
+    expected = _replay_unbounded(df, MACrossover(10, 30))
+
+    broker = PaperBroker(cash=10_000.0, fee=0.001)
+    trader = Trader(
+        "BTC/USDT", broker, MACrossover(10, 30), RiskManager(RiskConfig()),
+        RiskState(10_000.0), Notifier(echo=False), fee=0.001,
+    )
+    actual = trader.run_replay(df, warmup=50)
+
+    assert len(actual) == len(expected)
+    assert actual.to_list() == pytest.approx(expected.to_list())
