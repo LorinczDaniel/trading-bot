@@ -136,8 +136,8 @@ Fix: each `Strategy` exposes a `lookback` property —
 
 | Strategy | `lookback` |
 |---|---|
-| `MACrossover` | `slow` |
-| `RSIReversion` | `period + 1` |
+| `MACrossover` | `slow + 1` — `generate` reads the *previous* bar's averages (`ma_crossover.py:18`), so `slow` bars alone are one short |
+| `RSIReversion` | `period + 1` — `close.diff()` consumes a bar |
 | `TrendFilter` | `max(inner.lookback, sma_period)` |
 | `Strategy` (base) | `200` — covers the default `--trend-sma`, so a strategy that forgets to override is still correct, only slower |
 
