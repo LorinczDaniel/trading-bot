@@ -27,8 +27,18 @@ from live_runner import fetch_candles, act_and_save, run_forever
 
 def cmd_fetch(args):
     settings = load_settings()
+    # Public mainnet client on purpose: testnet OHLCV history is sparse and
+    # partly synthetic, and would poison every backtest built on it.
     exchange = getattr(ccxt, settings.exchange_id)({"enableRateLimit": True})
     prov = MarketDataProvider(exchange)
+    if args.days:
+        df = prov.backfill(args.symbol, args.timeframe, days=args.days)
+        if df.empty:
+            print(f"No candles returned for {args.symbol} {args.timeframe}.")
+            return
+        print(f"Backfilled {len(df)} candles for {args.symbol} {args.timeframe} "
+              f"({df.index[0]} -> {df.index[-1]}); cached.")
+        return
     df = prov.fetch(args.symbol, args.timeframe, args.limit)
     print(f"Fetched {len(df)} candles for {args.symbol} {args.timeframe}; cached.")
 
@@ -291,6 +301,9 @@ def build_parser():
     f.add_argument("--symbol", default="BTC/USDT")
     f.add_argument("--timeframe", default="1h")
     f.add_argument("--limit", type=int, default=500)
+    f.add_argument("--days", type=int, default=None,
+                   help="backfill this many days of history (paginated, merges into "
+                        "the cache). Suggested depth: 1h=365, 4h=730, 3m=30, 1m=7")
     f.set_defaults(func=cmd_fetch)
 
     b = sub.add_parser("backtest", help="backtest a strategy on cached candles")
