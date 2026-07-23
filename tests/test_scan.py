@@ -227,6 +227,54 @@ def test_scan_one_benchmarks_edge_over_the_traded_window_not_bar_zero():
     assert abs(expected_hold - bar_zero_hold) > 1.0
 
 
+def test_scan_one_pins_walk_forward_to_the_default_params(monkeypatch):
+    """Walk-forward inside `scan_one` must evaluate the SAME fixed params the
+    headline metrics report -- not a grid re-optimized per fold -- or the
+    `overfit`/`insufficient-folds` gates judge a different configuration than
+    every other gate on the row.
+
+    Captures the grid `scan_one` actually hands to `walk_forward` (not just
+    the resulting `best_params`): a one-entry grid pinned to the factory
+    default is the only thing that makes this deterministic. Checking
+    `best_params` alone would be data-dependent -- a widened, multi-entry
+    grid could still happen to pick the default on every fold for a given
+    dataset and pass spuriously. Asserting the grid itself fails immediately,
+    regardless of data, if the grid were ever widened back to multiple
+    entries.
+    """
+    import numpy as np
+    import backtest.scan as scan_mod
+    from strategies.factory import default_params
+
+    captured = {}
+    real_walk_forward = scan_mod.walk_forward
+
+    def spy(df, make_strategy, grid, **kwargs):
+        captured["grid"] = grid
+        folds = real_walk_forward(df, make_strategy, grid, **kwargs)
+        captured["folds"] = folds
+        return folds
+
+    monkeypatch.setattr(scan_mod, "walk_forward", spy)
+
+    n = 2000
+    rng = np.random.default_rng(1)
+    # Mild upward drift plus noise: enough crossovers for MA(20,50) to trade
+    # repeatedly within each walk-forward fold.
+    close = 100 + np.cumsum(rng.normal(0.05, 1.0, n))
+    index = pd.date_range("2026-01-01", periods=n, freq="1h")
+    df = pd.DataFrame({"close": close}, index=index)
+
+    scan_mod.scan_one(df, "BTC/USDT", "1h", "ma", warmup=60, splits=3)
+
+    assert captured["grid"] == [default_params("ma")]
+
+    valid_folds = [f for f in captured["folds"] if f["valid"]]
+    assert valid_folds, "expected at least one valid (traded) fold"
+    for f in valid_folds:
+        assert f["best_params"] == default_params("ma")
+
+
 def test_scan_one_flags_a_churning_config():
     """Success criterion 3: the 1m config that churned in the live ledger must
     be rejected by a gate, not quietly ranked."""

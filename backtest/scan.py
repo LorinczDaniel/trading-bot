@@ -10,7 +10,7 @@ import pandas as pd
 from backtest.metrics import total_return, max_drawdown, buy_and_hold_return
 from backtest.simulate import simulate, scan_risk_config
 from backtest.walkforward import walk_forward
-from strategies.factory import build_strategy, walk_forward_grid
+from strategies.factory import build_strategy, default_params, walk_forward_grid
 
 
 def total_fees(fills: list) -> float:
@@ -102,7 +102,24 @@ def scan_one(df, symbol: str, timeframe: str, strategy_name: str, *,
              cash: float = 10_000.0, fee: float = 0.001, warmup: int = 50,
              risk_per_trade: float = 0.01, stop_loss_pct: float = 0.05,
              splits: int = 4, trend_sma: int = 200) -> dict:
-    """Measure one (strategy, timeframe) configuration and return its scan row."""
+    """Measure one (strategy, timeframe) configuration and return its scan row.
+
+    Walk-forward here evaluates the SAME fixed parameters as the headline
+    metrics (`trades`, `net_return`, `edge`, `max_drawdown`, `worst_loss`,
+    `fee_drag`, all built via `build_strategy`'s defaults) — not a grid
+    re-optimized per fold. `walk_forward_grid`'s `make_strategy` is still used
+    (it correctly wraps `TrendFilter` for the `+trend` variants), but its grid
+    is replaced by a single entry from `default_params`, so `best_params` for
+    every valid fold is that same fixed tuple. This makes every gate on a scan
+    row — including `overfit` and `insufficient-folds`, which read straight
+    off the walk-forward folds — judge one object instead of two: the pinned
+    configuration is what a soak test actually runs, so the gates must judge
+    that configuration, not a fold-by-fold re-optimized one.
+
+    Whether the strategy FAMILY has edge under per-fold re-optimization is a
+    separate question — the `walkforward` CLI command still answers it, using
+    the full grid from `walk_forward_grid` unpinned.
+    """
     config = scan_risk_config(risk_per_trade=risk_per_trade, stop_loss_pct=stop_loss_pct)
     strategy = build_strategy(strategy_name, trend_sma=trend_sma)
     res = simulate(df, strategy, config, cash=cash, fee=fee, warmup=warmup)
@@ -115,9 +132,16 @@ def scan_one(df, symbol: str, timeframe: str, strategy_name: str, *,
     # len(df), and `df["close"].iloc[warmup:]` would then be empty too.
     hold = buy_and_hold_return(df["close"].iloc[warmup:], fee=fee) if len(res.equity) else 0.0
 
-    grid, make_strategy = walk_forward_grid(strategy_name, trend_sma=trend_sma)
+    # Pin the walk-forward grid to the same fixed params `build_strategy` used
+    # above, instead of the full `walk_forward_grid` (which re-optimizes per
+    # fold). NOT `None` and NOT an empty list: `walk_forward` treats
+    # `best_params is None` after its optimization loop as "fold invalid",
+    # so the sentinel for "don't search, just use this" has to be an actual
+    # one-entry grid, or every fold would report invalid even when it traded.
+    _, make_strategy = walk_forward_grid(strategy_name, trend_sma=trend_sma)
+    pinned_grid = [default_params(strategy_name)]
     try:
-        folds = walk_forward(df, make_strategy, grid, n_splits=splits,
+        folds = walk_forward(df, make_strategy, pinned_grid, n_splits=splits,
                              initial_cash=cash, fee=fee, warmup=warmup,
                              risk_config=config)
     except ValueError:

@@ -26,6 +26,27 @@ def build_strategy(
     raise ValueError(f"unknown strategy: {name!r} (choose from {STRATEGY_NAMES})")
 
 
+def default_params(name: str):
+    """Return `build_strategy`'s default parameter tuple for `name`, shaped to
+    match what `walk_forward_grid`'s `make_strategy` expects for that family.
+
+    This is the single source of truth `scan_one` pins walk-forward to, so that
+    every gate on a scan row judges the same fixed configuration the headline
+    metrics (built via `build_strategy` with its own defaults) were measured
+    on. Mirrors `build_strategy`'s signature defaults by hand rather than via
+    `inspect.signature` (matching this module's existing style, e.g.
+    `walk_forward_grid`'s hardcoded grids) — if those defaults ever change,
+    this function must change with them:
+      - ma / ma+trend  -> (fast=20, slow=50)
+      - rsi / rsi+trend -> (rsi_period=14, rsi_low=30.0, rsi_high=70.0)
+    """
+    if name in ("ma", "ma+trend"):
+        return (20, 50)
+    if name in ("rsi", "rsi+trend"):
+        return (14, 30.0, 70.0)
+    raise ValueError(f"unknown strategy: {name!r} (choose from {STRATEGY_NAMES})")
+
+
 def walk_forward_grid(name: str, trend_sma: int = 200):
     """Return (param_grid, make_strategy) for walk-forward optimization of `name`.
 
