@@ -54,3 +54,31 @@ def worst_cumulative_loss(trades: list, starting_cash: float) -> float:
         running += float(t["pnl"])
         worst = min(worst, running)
     return abs(worst) / starting_cash if starting_cash else 0.0
+
+
+# Gate thresholds. Fixed by the design spec before any results were seen; tuning
+# them after looking at output turns "survives walk-forward" into post-hoc
+# rationalization, which is the exact failure the gates exist to prevent.
+MIN_TRADES = 20              # below this, results are noise
+MAX_TRADES_PER_DAY = 6.0     # above this, a swing bot is churning
+MAX_FEE_DRAG = 0.30          # costs must not eat a third of the activity
+MIN_FOLDS_TRADED = 2         # walk-forward needs at least two folds to say anything
+
+
+def verdict(row: dict) -> tuple[str, str]:
+    """Apply the gates in order and return ("PASS", "") or ("FAIL", label).
+
+    Order matters only for which label a multiply-failing config reports; the
+    cheapest, most fundamental objection is checked first.
+    """
+    if row["trades"] < MIN_TRADES:
+        return "FAIL", "too-few-trades"
+    if row["trades_per_day"] > MAX_TRADES_PER_DAY:
+        return "FAIL", "churn"
+    if row["fee_drag"] > MAX_FEE_DRAG:
+        return "FAIL", "fee-drag"
+    if row["folds_traded"] < MIN_FOLDS_TRADED:
+        return "FAIL", "insufficient-folds"
+    if row["avg_is"] > 0 and row["avg_oos"] < 0:
+        return "FAIL", "overfit"
+    return "PASS", ""

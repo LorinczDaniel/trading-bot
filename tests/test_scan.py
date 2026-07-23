@@ -48,3 +48,58 @@ def test_worst_cumulative_loss_finds_the_deepest_point():
 def test_worst_cumulative_loss_is_zero_when_never_negative():
     trades = [{"pnl": 100.0}, {"pnl": 50.0}]
     assert worst_cumulative_loss(trades, 10_000.0) == 0.0
+
+
+from backtest.scan import verdict, MIN_TRADES, MAX_TRADES_PER_DAY, MAX_FEE_DRAG
+
+
+def _passing_row(**overrides):
+    row = {"trades": 50, "trades_per_day": 0.5, "fee_drag": 0.05,
+           "folds_traded": 3, "avg_is": 0.10, "avg_oos": 0.04}
+    row.update(overrides)
+    return row
+
+
+def test_thresholds_match_the_spec():
+    assert MIN_TRADES == 20
+    assert MAX_TRADES_PER_DAY == 6.0
+    assert MAX_FEE_DRAG == 0.30
+
+
+def test_a_good_config_passes():
+    assert verdict(_passing_row()) == ("PASS", "")
+
+
+def test_too_few_trades_fails():
+    assert verdict(_passing_row(trades=19)) == ("FAIL", "too-few-trades")
+
+
+def test_churn_fails():
+    assert verdict(_passing_row(trades_per_day=6.1)) == ("FAIL", "churn")
+
+
+def test_fee_drag_fails():
+    assert verdict(_passing_row(fee_drag=0.31)) == ("FAIL", "fee-drag")
+
+
+def test_infinite_fee_drag_fails():
+    assert verdict(_passing_row(fee_drag=float("inf"))) == ("FAIL", "fee-drag")
+
+
+def test_insufficient_folds_fails():
+    assert verdict(_passing_row(folds_traded=1)) == ("FAIL", "insufficient-folds")
+
+
+def test_overfit_fails_when_profit_does_not_survive_out_of_sample():
+    assert verdict(_passing_row(avg_is=0.20, avg_oos=-0.05)) == ("FAIL", "overfit")
+
+
+def test_losing_in_sample_is_not_overfit():
+    """Bad in both halves is honest failure, not curve-fitting."""
+    assert verdict(_passing_row(avg_is=-0.10, avg_oos=-0.05)) == ("PASS", "")
+
+
+def test_boundaries_are_inclusive_where_the_spec_says_so():
+    assert verdict(_passing_row(trades=MIN_TRADES)) == ("PASS", "")
+    assert verdict(_passing_row(trades_per_day=MAX_TRADES_PER_DAY)) == ("PASS", "")
+    assert verdict(_passing_row(fee_drag=MAX_FEE_DRAG)) == ("PASS", "")
