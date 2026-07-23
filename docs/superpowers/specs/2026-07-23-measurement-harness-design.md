@@ -75,6 +75,12 @@ change. Testnet OHLCV history is sparse and partly synthetic; routing backfill
 through the authenticated testnet broker would corrupt every downstream
 measurement.
 
+**Backfill spans per timeframe.** Depth is chosen per timeframe, not uniformly —
+a year of 1m bars is ~525,000 rows and would dominate scan runtime for no benefit,
+because churn reveals itself within hours. Targets: **1h → ~1 year**, **4h → ~2
+years**, **3m → ~30 days**, **1m → ~7 days**. The slow timeframes carry the
+walk-forward validation; the fast ones only have to expose churn.
+
 **Tests:** a fake exchange serving fixed pages asserts that the cursor advances,
 that duplicates are dropped, that pre-existing cached rows survive a merge, and
 that a no-progress response terminates the loop.
@@ -154,7 +160,7 @@ sample, and `walk_forward` for the in-sample/out-of-sample gap. Emit one row per
 configuration:
 
 `strategy, timeframe, bars, days, trades, trades/day, net return, edge vs buy &
-hold, max drawdown, fee drag, OOS gap, verdict`
+hold, max drawdown, worst cumulative loss, fee drag, OOS gap, verdict`
 
 `fee drag` is total fees divided by the absolute gross P&L — the fraction of the
 strategy's activity consumed by costs. When gross P&L is exactly zero (no
@@ -175,12 +181,44 @@ this spec.
 | Sample size | `trades >= 20` | `too-few-trades` |
 | Churn | `trades_per_day <= 6` | `churn` |
 | Fee drag | `fees <= 30%` of gross P&L | `fee-drag` |
-| Kill-switch | never tripped during the sim | `kill-switch` |
 
-The kill-switch gate is measured by counting `RiskManager.approve` rejections
-whose reason is a drawdown or session-loss halt (as opposed to the routine
-"max positions reached", which fires on every bar while a position is open and
-means nothing). `simulate` exposes that count on its result.
+### The kill-switch is not a gate
+
+An earlier draft gated on "the kill-switch never tripped". That is wrong, and the
+reason matters enough to record.
+
+`RiskState.realized_pnl` accumulates across a whole run and never resets
+(`risk/manager.py:22-26`), and `RiskManager.approve` halts once
+`−realized_pnl / starting_equity >= max_session_loss` (0.10 by default,
+`manager.py:55-57`). That threshold is *session*-scoped and latching: once a run
+crosses it, approval is denied for every remaining bar. Applied to a multi-year
+historical sample, any configuration active enough to clear the 20-trade minimum
+will eventually accumulate a 10% losing stretch — and then trade no more, even if
+it would have recovered and finished up.
+
+Used as a gate, this fails nearly every actively-trading configuration, and the
+scan reports "nothing is worth soaking" as a finding when the truth is a
+mis-scaled threshold. That is precisely the trap the gates exist to avoid.
+
+The kill-switch is a live-operations control: halt and call a human. It is not a
+config-selection criterion, and it cannot be both at these thresholds.
+
+**Therefore:** `scan` passes `simulate` a risk config with the kill-switch
+thresholds effectively disabled (`max_drawdown = 1.0`, `max_session_loss = 1.0`)
+while keeping risk-based **sizing** and **stop-losses** — which are the parts that
+actually diverged from the old all-in engine. The one-path property is unaffected:
+the code path is identical, only a config value differs, and config is already a
+parameter.
+
+Drawdown and worst cumulative realized loss are reported as **ranking columns**,
+not gates, so a config that would have tripped a live halt is visible rather than
+erased. `backtest` and `walkforward` use the same scan config by default and gain
+a `--kill-switch` flag for the separate, deliberate question "would this have
+halted?".
+
+This also removes a second-order distortion: with the halt live, a walk-forward
+fold could latch off partway through, and its out-of-sample return would measure
+"halted early" rather than true edge.
 | Fold coverage | at least 2 walk-forward folds traded | `insufficient-folds` |
 | Overfit | fails when `avg_is > 0` **and** `avg_oos < 0` | `overfit` |
 
