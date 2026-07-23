@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from broker.paper_broker import PaperBroker
 from risk.manager import RiskConfig, RiskManager, RiskState
@@ -13,6 +14,13 @@ class Scripted(Strategy):
 
     def generate(self, df):
         return Signal(self.actions.get(len(df) - 1, "HOLD"))
+
+
+class HoldStrategy(Strategy):
+    lookback = 1
+
+    def generate(self, df):
+        return Signal("HOLD")
 
 
 def _make(cash=1000.0, fee=0.0, config=None):
@@ -51,3 +59,19 @@ def test_kill_switch_blocks_buy():
     trader.run_replay(df, warmup=0)
     assert broker.fetch_balance()["base"] == 0.0  # never entered
     assert any("blocked" in m.lower() for m in notifier.messages)
+
+
+def test_run_replay_returns_per_bar_equity():
+    df = pd.DataFrame({"close": [100.0, 101.0, 102.0, 103.0]})
+    broker = PaperBroker(cash=1000.0, fee=0.0)
+    trader = Trader(
+        "BTC/USDT", broker, HoldStrategy(), RiskManager(RiskConfig()),
+        RiskState(1000.0), Notifier(echo=False), fee=0.0,
+    )
+
+    equity = trader.run_replay(df, warmup=1)
+
+    assert isinstance(equity, pd.Series)
+    assert len(equity) == 3                      # bars 1, 2, 3 — warmup skips bar 0
+    assert list(equity.index) == [1, 2, 3]
+    assert all(v == pytest.approx(1000.0) for v in equity)   # never traded

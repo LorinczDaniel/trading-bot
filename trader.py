@@ -93,7 +93,16 @@ class Trader:
         self.entry_price = 0.0
         self.stop_price = 0.0
 
-    def run_replay(self, df: pd.DataFrame, warmup: int = 50) -> None:
-        """Drive the loop bar-by-bar over historical candles (a paper session)."""
+    def run_replay(self, df: pd.DataFrame, warmup: int = 50) -> pd.Series:
+        """Drive the loop bar-by-bar over historical candles (a paper session).
+
+        Returns equity after each replayed bar. The per-bar curve is what
+        drawdown and Sharpe are computed from — the trade ledger only records
+        equity at fills, which is too sparse to measure a drawdown.
+        """
+        equity, index = [], []
         for i in range(warmup, len(df)):
             self.step(df.iloc[: i + 1])
+            equity.append(self.broker.equity(float(df["close"].iloc[i])))
+            index.append(df.index[i])
+        return pd.Series(equity, index=index, dtype="float64")
