@@ -7,7 +7,7 @@ import pandas as pd
 from config.settings import load_settings
 from data.provider import MarketDataProvider
 from strategies.factory import build_strategy, walk_forward_grid, STRATEGY_NAMES
-from backtest.engine import run_backtest
+from backtest.simulate import simulate, scan_risk_config, live_risk_config
 from backtest.metrics import total_return, max_drawdown, sharpe_ratio, buy_and_hold_return
 from backtest.walkforward import walk_forward
 from broker.base import Order
@@ -55,19 +55,25 @@ def cmd_backtest(args):
         rsi_high=args.rsi_high,
         trend_sma=args.trend_sma,
     )
-    res = run_backtest(df, strategy)
+    make_config = live_risk_config if args.kill_switch else scan_risk_config
+    config = make_config(risk_per_trade=args.risk, stop_loss_pct=args.stop)
+    res = simulate(df, strategy, config, cash=args.cash, fee=args.fee, warmup=args.warmup)
+
     strat_ret = total_return(res.equity)
     hold_ret = buy_and_hold_return(df["close"])
     edge = strat_ret - hold_ret
+    fees = sum(float(f.get("fee") or 0.0) for f in res.fills)
     print(f"Strategy:      {args.strategy}")
     print(f"Bars:          {len(res.equity)}")
-    print(f"Final equity:  {res.final_equity:,.2f}")
+    print(f"Final equity:  {res.final_equity:,.2f}   (started {args.cash:,.2f})")
     print(f"Total return:  {strat_ret:.2%}")
     print(f"Max drawdown:  {max_drawdown(res.equity):.2%}")
     print(f"Sharpe:        {sharpe_ratio(res.equity):.2f}")
-    print(f"Trades:        {len(res.trades)}")
+    print(f"Round-trips:   {len(res.trades)}   (fills: {len(res.fills)})")
+    print(f"Fees paid:     {fees:,.2f}")
     print(f"Buy & hold:    {hold_ret:.2%}")
     print(f"Edge vs hold:  {edge:+.2%}  ({'BEAT hold' if edge > 0 else 'LOST to hold'})")
+    print(f"Kill-switch:   {'live thresholds' if args.kill_switch else 'disabled (measurement mode)'}")
 
 
 def cmd_walkforward(args):
@@ -311,6 +317,15 @@ def build_parser():
     b.add_argument("--timeframe", default="1h")
     _add_strategy_args(b)
     _add_param_args(b)
+    b.add_argument("--cash", type=float, default=10_000.0)
+    b.add_argument("--fee", type=float, default=0.001)
+    b.add_argument("--risk", type=float, default=0.01, help="fraction of equity risked per trade")
+    b.add_argument("--stop", type=float, default=0.05, help="stop-loss distance below entry")
+    b.add_argument("--warmup", type=int, default=50)
+    b.add_argument("--kill-switch", action="store_true",
+                   help="apply the live drawdown/session-loss halts. Off by default: "
+                        "they latch permanently over long samples and would truncate "
+                        "the measurement rather than describe it.")
     b.set_defaults(func=cmd_backtest)
 
     w = sub.add_parser("walkforward", help="walk-forward validation (in-sample vs out-of-sample)")
