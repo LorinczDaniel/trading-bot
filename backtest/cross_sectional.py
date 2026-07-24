@@ -158,12 +158,31 @@ def run_cross_sectional(panel: pd.DataFrame, rank_fn, top_k: int = 5,
             )
             if target:
                 per = book / len(target)
-                for symbol in target:
+                # TWO PASSES, and the order is load-bearing. Interleaving trims
+                # with top-ups caps an underweight position at whatever cash
+                # happens to be free at that moment, and the cash a later trim
+                # releases is never deployed — the book then drifts off equal
+                # weight and accumulates idle cash, which reads as a strategy
+                # result rather than an accounting defect.
+                for symbol in target:                       # pass 1: trim
                     p = price_at(symbol, i)
-                    held_value = holdings.get(symbol, 0.0) * p
-                    delta_value = per - held_value
-                    if delta_value > 0:                     # top up
-                        spend = min(delta_value, free_cash)
+                    over = holdings.get(symbol, 0.0) * p - per
+                    if over > 0:
+                        qty = min(over / p, holdings.get(symbol, 0.0))
+                        if qty > 0:
+                            proceeds = qty * p
+                            holdings[symbol] -= qty
+                            free_cash += proceeds - proceeds * fee
+                            fees_paid += proceeds * fee
+                    last_seen[symbol] = p
+
+                for symbol in target:                       # pass 2: top up
+                    p = price_at(symbol, i)
+                    under = per - holdings.get(symbol, 0.0) * p
+                    if under > 0:
+                        # Fees mean the book cannot be fully redeployed; cap at
+                        # cash actually on hand rather than going negative.
+                        spend = min(under, free_cash)
                         if spend > 0:
                             cost_fee = spend * fee
                             qty = (spend - cost_fee) / p
@@ -172,14 +191,6 @@ def run_cross_sectional(panel: pd.DataFrame, rank_fn, top_k: int = 5,
                             fees_paid += cost_fee
                             trades.append({"date": panel.index[i], "symbol": symbol,
                                            "side": "buy", "price": p, "qty": qty})
-                    elif delta_value < 0:                   # trim
-                        qty = min(-delta_value / p, holdings.get(symbol, 0.0))
-                        if qty > 0:
-                            proceeds = qty * p
-                            holdings[symbol] -= qty
-                            free_cash += proceeds - proceeds * fee
-                            fees_paid += proceeds * fee
-                    last_seen[symbol] = p
 
             after = set(holdings)
             # The first rebalance builds the book out of cash, which is always

@@ -102,6 +102,44 @@ def test_a_coin_with_no_price_today_is_not_eligible():
 # --- accounting ------------------------------------------------------------
 
 
+def test_rebalancing_restores_equal_weight_when_a_holding_must_be_trimmed():
+    """Trims must free cash BEFORE top-ups spend it.
+
+    If top-ups and trims are interleaved, an underweight position processed
+    first is capped by whatever cash happens to be free at that moment, and the
+    cash a later trim releases is never deployed. The portfolio then silently
+    drifts away from equal weight and accumulates idle cash — which looks like
+    a strategy result rather than an accounting defect.
+
+    Constructed so the UNDERWEIGHT coin ranks first: A doubles, B halves, so
+    at the second rebalance B needs topping up and A needs trimming, and B is
+    handled first.
+    """
+    a = [100.0] * 11 + [200.0] * 19        # doubles after the first rebalance
+    b = [100.0] * 11 + [50.0] * 19         # halves
+    panel = _panel({"A/USDT": a, "B/USDT": b})
+    # B ranks higher, so it is processed first and needs a top-up.
+    res = run_cross_sectional(panel, lambda h: pd.Series({"B/USDT": 2.0, "A/USDT": 1.0}),
+                              top_k=2, rebalance_days=10, warmup=10,
+                              cash=10_000.0, fee=0.0)
+    weights = res.rebalances[1]["weights"]
+    assert weights["A/USDT"] == pytest.approx(weights["B/USDT"], rel=1e-6)
+
+
+def test_rebalancing_leaves_no_idle_cash():
+    """The mirror of the above, stated as an invariant: after a rebalance into
+    a non-empty target, essentially everything should be invested."""
+    a = [100.0] * 11 + [200.0] * 19
+    b = [100.0] * 11 + [50.0] * 19
+    panel = _panel({"A/USDT": a, "B/USDT": b})
+    res = run_cross_sectional(panel, lambda h: pd.Series({"B/USDT": 2.0, "A/USDT": 1.0}),
+                              top_k=2, rebalance_days=10, warmup=10,
+                              cash=10_000.0, fee=0.0)
+    invested = sum(res.rebalances[1]["weights"].values())
+    assert invested == pytest.approx(res.equity.loc[res.rebalances[1]["date"]],
+                                     rel=1e-6)
+
+
 def test_a_flat_market_with_no_fees_preserves_capital():
     panel = _panel({"A/USDT": _flat(30), "B/USDT": _flat(30)})
     res = run_cross_sectional(panel, lambda h: pd.Series({"A/USDT": 1.0, "B/USDT": 2.0}),
