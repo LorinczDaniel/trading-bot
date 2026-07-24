@@ -6,6 +6,7 @@ import pandas as pd
 
 from config.settings import load_settings
 from data.provider import MarketDataProvider
+from data.universe import candidate_symbols
 from strategies.factory import build_strategy, walk_forward_grid, STRATEGY_NAMES
 from backtest.simulate import simulate, scan_risk_config, live_risk_config
 from backtest.metrics import total_return, max_drawdown, sharpe_ratio, buy_and_hold_return
@@ -42,6 +43,47 @@ def cmd_fetch(args):
         return
     df = prov.fetch(args.symbol, args.timeframe, args.limit)
     print(f"Fetched {len(df)} candles for {args.symbol} {args.timeframe}; cached.")
+
+
+def cmd_fetch_universe(args):
+    """Backfill many symbols so cross-sectional work has a panel to run on.
+
+    Failures are collected and reported rather than aborting the run: across
+    dozens of symbols some will be delisted, thinly traded, or rate-limited, and
+    losing the whole download to one bad symbol would make the command useless
+    exactly when the universe is widest.
+    """
+    settings = load_settings()
+    exchange = getattr(ccxt, settings.exchange_id)({"enableRateLimit": True})
+    extra = [s.strip() for s in args.extra.split(",") if s.strip()]
+    symbols = candidate_symbols(exchange, quote=args.quote, limit=args.top,
+                                extra=extra)
+    print(f"{len(symbols)} symbols to backfill "
+          f"({args.timeframe}, {args.days} days). Delisted coins are kept on "
+          f"purpose — see docs/research/2026-07-24-multi-coin-data-integrity.md.")
+
+    prov = MarketDataProvider(exchange)
+    ok, failed = [], []
+    for i, symbol in enumerate(symbols, 1):
+        try:
+            df = prov.backfill(symbol, args.timeframe, days=args.days)
+        except Exception as e:
+            failed.append((symbol, f"{type(e).__name__}: {e}"))
+            print(f"  [{i}/{len(symbols)}] {symbol:<16} FAILED ({type(e).__name__})",
+                  flush=True)
+            continue
+        if df.empty:
+            failed.append((symbol, "no candles returned"))
+            print(f"  [{i}/{len(symbols)}] {symbol:<16} empty", flush=True)
+            continue
+        ok.append(symbol)
+        print(f"  [{i}/{len(symbols)}] {symbol:<16} {len(df):>5} bars  "
+              f"{df.index[0].date()} -> {df.index[-1].date()}", flush=True)
+
+    print()
+    print(f"cached {len(ok)}/{len(symbols)} symbols.")
+    for symbol, why in failed:
+        print(f"  SKIPPED {symbol}: {why}")
 
 
 def cmd_backtest(args):
@@ -379,6 +421,18 @@ def build_parser():
                    help="backfill this many days of history (paginated, merges into "
                         "the cache). Suggested depth: 1h=365, 4h=730, 3m=30, 1m=7")
     f.set_defaults(func=cmd_fetch)
+
+    fu = sub.add_parser("fetch-universe",
+                        help="backfill many symbols for cross-sectional work")
+    fu.add_argument("--top", type=int, default=50,
+                    help="how many symbols to take, ranked by current quote volume")
+    fu.add_argument("--quote", default="USDT")
+    fu.add_argument("--timeframe", default="1d")
+    fu.add_argument("--days", type=int, default=1500)
+    fu.add_argument("--extra", default="",
+                    help="comma-separated symbols to force into the download set "
+                         "(e.g. known-dead coins today's ranking would miss)")
+    fu.set_defaults(func=cmd_fetch_universe)
 
     b = sub.add_parser("backtest", help="backtest a strategy on cached candles")
     b.add_argument("--symbol", default="BTC/USDT")
