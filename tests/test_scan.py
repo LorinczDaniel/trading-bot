@@ -397,6 +397,74 @@ def test_scan_one_does_not_count_a_breakeven_fold_as_positive():
     assert row["folds_positive_oos"] == 1
 
 
+def test_scan_one_applies_the_band_to_the_headline_and_the_folds_alike():
+    """A scan row must describe ONE object. `scan_one` builds the headline
+    strategy via `build_strategy` and the fold strategies via
+    `walk_forward_grid`'s `make_strategy`; a band that reached only one of
+    them would reintroduce the split-object defect 12e0e61 removed, this time
+    invisibly, because both halves would still be MA crossovers.
+
+    Captures the actual objects handed to each path rather than the resulting
+    numbers, so the assertion cannot pass by coincidence on data where the
+    band happens not to bite.
+    """
+    import numpy as np
+    import backtest.scan as scan_mod
+
+    seen = {"headline": [], "folds": []}
+    real_simulate = scan_mod.simulate
+    real_walk_forward = scan_mod.walk_forward
+
+    def simulate_spy(df, strategy, *a, **k):
+        seen["headline"].append(strategy)
+        return real_simulate(df, strategy, *a, **k)
+
+    def walk_forward_spy(df, make_strategy, grid, **kwargs):
+        seen["folds"].append(make_strategy(grid[0]))
+        return real_walk_forward(df, make_strategy, grid, **kwargs)
+
+    scan_mod.simulate = simulate_spy
+    scan_mod.walk_forward = walk_forward_spy
+    try:
+        n = 600
+        rng = np.random.default_rng(4)
+        close = 100 + np.cumsum(rng.normal(0.05, 1.0, n))
+        index = pd.date_range("2026-01-01", periods=n, freq="1h")
+        df = pd.DataFrame({"close": close}, index=index)
+        scan_mod.scan_one(df, "BTC/USDT", "1h", "ma", warmup=60, splits=2, band=0.02)
+    finally:
+        scan_mod.simulate = real_simulate
+        scan_mod.walk_forward = real_walk_forward
+
+    assert seen["headline"], "scan_one did not run the headline simulation"
+    assert seen["folds"], "scan_one did not run walk-forward"
+    assert all(s.band == pytest.approx(0.02) for s in seen["headline"])
+    assert all(s.band == pytest.approx(0.02) for s in seen["folds"])
+
+
+def test_scan_one_defaults_to_an_unbanded_strategy():
+    """Every result in the research docs was measured without a band; the
+    scan must keep reproducing them unless a band is asked for explicitly."""
+    import numpy as np
+    import backtest.scan as scan_mod
+
+    seen = []
+    real_simulate = scan_mod.simulate
+    scan_mod.simulate = lambda df, strategy, *a, **k: (
+        seen.append(strategy) or real_simulate(df, strategy, *a, **k))
+    try:
+        n = 400
+        rng = np.random.default_rng(5)
+        close = 100 + np.cumsum(rng.normal(0.05, 1.0, n))
+        index = pd.date_range("2026-01-01", periods=n, freq="1h")
+        df = pd.DataFrame({"close": close}, index=index)
+        scan_mod.scan_one(df, "BTC/USDT", "1h", "ma", warmup=60, splits=2)
+    finally:
+        scan_mod.simulate = real_simulate
+
+    assert seen and all(s.band == 0.0 for s in seen)
+
+
 def test_scan_one_flags_a_churning_config():
     """Success criterion 3: the 1m config that churned in the live ledger must
     be rejected by a gate, not quietly ranked."""

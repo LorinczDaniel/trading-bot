@@ -151,7 +151,7 @@ def cmd_scan(args):
             row = scan_one(df, args.symbol, tf, name, cash=args.cash, fee=args.fee,
                            warmup=args.warmup, risk_per_trade=args.risk,
                            stop_loss_pct=args.stop, splits=args.splits,
-                           trend_sma=args.trend_sma)
+                           trend_sma=args.trend_sma, band=args.band)
             rows.append(row)
             print(f"  scanned {name} {tf} in {time.time() - started:.1f}s", flush=True)
 
@@ -410,6 +410,10 @@ def build_parser():
     sc.add_argument("--strategies", default=",".join(STRATEGY_NAMES),
                     help="comma-separated subset of " + ",".join(STRATEGY_NAMES))
     sc.add_argument("--trend-sma", type=int, default=200)
+    sc.add_argument("--band", type=float, default=0.0,
+                    help="MA cost band: entries must clear slow*(1+band), exits "
+                         "must break slow*(1-band). 0 (default) reproduces every "
+                         "previously recorded measurement. Applies to ma/ma+trend only.")
     sc.add_argument("--splits", type=int, default=4)
     sc.add_argument("--cash", type=float, default=10_000.0)
     sc.add_argument("--fee", type=float, default=0.001)

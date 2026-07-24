@@ -114,7 +114,7 @@ def verdict(row: dict) -> tuple[str, str]:
 def scan_one(df, symbol: str, timeframe: str, strategy_name: str, *,
              cash: float = 10_000.0, fee: float = 0.001, warmup: int = 50,
              risk_per_trade: float = 0.01, stop_loss_pct: float = 0.05,
-             splits: int = 4, trend_sma: int = 200) -> dict:
+             splits: int = 4, trend_sma: int = 200, band: float = 0.0) -> dict:
     """Measure one (strategy, timeframe) configuration and return its scan row.
 
     Walk-forward here evaluates the SAME fixed parameters as the headline
@@ -138,7 +138,7 @@ def scan_one(df, symbol: str, timeframe: str, strategy_name: str, *,
     the full grid from `walk_forward_grid` unpinned.
     """
     config = scan_risk_config(risk_per_trade=risk_per_trade, stop_loss_pct=stop_loss_pct)
-    strategy = build_strategy(strategy_name, trend_sma=trend_sma)
+    strategy = build_strategy(strategy_name, trend_sma=trend_sma, band=band)
     res = simulate(df, strategy, config, cash=cash, fee=fee, warmup=warmup)
 
     net = total_return(res.equity) if len(res.equity) else 0.0
@@ -155,7 +155,8 @@ def scan_one(df, symbol: str, timeframe: str, strategy_name: str, *,
     # `best_params is None` after its optimization loop as "fold invalid",
     # so the sentinel for "don't search, just use this" has to be an actual
     # one-entry grid, or every fold would report invalid even when it traded.
-    _, make_strategy = walk_forward_grid(strategy_name, trend_sma=trend_sma)
+    # Same `band` as `build_strategy` above -- see that function's docstring.
+    _, make_strategy = walk_forward_grid(strategy_name, trend_sma=trend_sma, band=band)
     pinned_grid = [default_params(strategy_name)]
     try:
         folds = walk_forward(df, make_strategy, pinned_grid, n_splits=splits,
