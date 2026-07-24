@@ -63,14 +63,20 @@ def momentum_rank(window: int = 28):
 
 def run_cross_sectional(panel: pd.DataFrame, rank_fn, top_k: int = 5,
                         rebalance_days: int = 7, cash: float = 10_000.0,
-                        fee: float = 0.001, warmup: int = 30
-                        ) -> CrossSectionalResult:
+                        fee: float = 0.001, warmup: int = 30,
+                        members_fn=None) -> CrossSectionalResult:
     """Replay an equal-weighted top-K portfolio over `panel` (wide close prices).
 
     At each rebalance the ranker is handed history strictly BEFORE the executing
     bar, so a signal can never be computed from the price it trades at. Coins
     with no price on the rebalance date are ineligible however well they rank —
     they could not have been bought.
+
+    `members_fn(date) -> list` supplies point-in-time universe membership: only
+    those symbols may be held on that date, and a holding that drops out is
+    sold. Omitting it makes the whole panel eligible, which is what produced the
+    invalidated result in `2026-07-24-cross-sectional-results.md` — kept so the
+    biased and unbiased runs can be compared through one engine rather than two.
 
     Positions are equally weighted, fees are charged on both sides of every
     change, and equity is marked on every bar so drawdown inside a holding
@@ -119,9 +125,16 @@ def run_cross_sectional(panel: pd.DataFrame, rank_fn, top_k: int = 5,
                 scores = pd.Series(dtype=float)
             scores = scores.dropna()
 
+            # Point-in-time membership: who was liquid enough to trade on this
+            # date, judged only on data available then.
+            allowed = None
+            if members_fn is not None:
+                allowed = set(members_fn(panel.index[i]))
+
             # Only coins with a price on THIS bar can actually be traded.
             eligible = [s for s in scores.index
-                        if s in panel.columns and price_at(s, i) is not None]
+                        if s in panel.columns and price_at(s, i) is not None
+                        and (allowed is None or s in allowed)]
             ranked = sorted(eligible, key=lambda s: scores[s], reverse=True)
             target = ranked[:top_k]
 

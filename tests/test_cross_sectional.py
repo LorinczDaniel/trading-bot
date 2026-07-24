@@ -219,6 +219,63 @@ def test_momentum_rank_prefers_the_stronger_trailing_return():
     assert scores["UP/USDT"] > scores["DOWN/USDT"]
 
 
+# --- point-in-time membership ---------------------------------------------
+# The defect that invalidated the first cross-sectional run: the universe was
+# chosen by TODAY's volume. The engine must accept per-date membership so a coin
+# can only be bought on dates it was actually liquid.
+
+
+def test_only_members_at_that_date_can_be_bought():
+    panel = _panel({"A/USDT": _flat(30), "B/USDT": _flat(30)})
+    ranks = pd.Series({"A/USDT": 1.0, "B/USDT": 99.0})
+    # B ranks far higher but is not a member, so it must not be held.
+    res = run_cross_sectional(panel, lambda h: ranks, top_k=2,
+                              rebalance_days=10, warmup=10,
+                              members_fn=lambda date: ["A/USDT"])
+    assert res.rebalances[0]["held"] == ["A/USDT"]
+
+
+def test_membership_is_consulted_per_rebalance_date_not_once():
+    seen = []
+
+    def members(date):
+        seen.append(date)
+        return ["A/USDT"]
+
+    panel = _panel({"A/USDT": _flat(40)})
+    run_cross_sectional(panel, lambda h: pd.Series({"A/USDT": 1.0}), top_k=1,
+                        rebalance_days=10, warmup=10, members_fn=members)
+    assert len(seen) >= 3
+    assert len(set(seen)) == len(seen), "each rebalance needs its own membership"
+
+
+def test_a_coin_leaving_the_universe_is_sold():
+    """A holding that drops out of the liquid set must be exited, not carried.
+    Carrying it would let the portfolio hold something it could no longer have
+    bought — the mirror of the look-ahead the membership rule exists to stop."""
+    panel = _panel({"A/USDT": _flat(40), "B/USDT": _flat(40)})
+    calls = {"n": 0}
+
+    def members(date):
+        calls["n"] += 1
+        return ["A/USDT", "B/USDT"] if calls["n"] == 1 else ["A/USDT"]
+
+    res = run_cross_sectional(panel, lambda h: pd.Series({"A/USDT": 1.0, "B/USDT": 2.0}),
+                              top_k=2, rebalance_days=10, warmup=10, fee=0.0,
+                              members_fn=members)
+    assert set(res.rebalances[0]["held"]) == {"A/USDT", "B/USDT"}
+    assert res.rebalances[1]["held"] == ["A/USDT"]
+
+
+def test_no_members_fn_means_the_whole_panel_is_eligible():
+    """Backwards compatible: omitting membership keeps the old behaviour so the
+    biased and unbiased runs can be compared through one engine."""
+    panel = _panel({"A/USDT": _flat(30), "B/USDT": _flat(30)})
+    res = run_cross_sectional(panel, lambda h: pd.Series({"A/USDT": 1.0, "B/USDT": 2.0}),
+                              top_k=2, rebalance_days=10, warmup=10)
+    assert set(res.rebalances[0]["held"]) == {"A/USDT", "B/USDT"}
+
+
 def test_momentum_rank_omits_coins_without_enough_history():
     rank = momentum_rank(window=5)
     history = _panel({"A/USDT": [100.0, 101.0, 102.0, 103.0, 104.0, 130.0]})
