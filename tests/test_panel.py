@@ -4,7 +4,10 @@ import pytest
 from data.panel import (
     build_panel,
     find_redenominations,
+    realized_volatility,
     MAX_BAR_RETURN,
+    MIN_VOLATILITY,
+    MIN_VOLATILITY_BARS,
 )
 
 
@@ -68,6 +71,80 @@ def test_zero_and_missing_prices_do_not_crash_the_screen():
     rather than raising or dividing by zero."""
     closes = [10.0, 0.0, 0.0, 5.0, float("nan"), 6.0]
     find_redenominations(_series(closes)["close"])   # must not raise
+
+
+# --- stablecoin screen -----------------------------------------------------
+# `USD1/USDT` reached the cache through the EXCLUDED_BASES name list and churned
+# on noise around $1.00 (fee drag 1.14). New stablecoins keep being issued, so a
+# denylist cannot hold — the same objection already accepted for redenominations.
+# A stablecoin is identifiable by what it DOES.
+
+
+def _peg(n=60):
+    """A pegged token: tiny alternating wobble around 1.00."""
+    return [1.0 + (0.001 if i % 2 else -0.001) for i in range(n)]
+
+
+def _volatile(n=60):
+    """A real coin: percent-scale moves, no drift assumption."""
+    return [100.0 * (1.0 + 0.05 * ((i * 7 % 11) - 5) / 5.0) for i in range(n)]
+
+
+def test_a_stablecoin_has_near_zero_volatility():
+    assert realized_volatility(_series(_peg())["close"]) < MIN_VOLATILITY
+
+
+def test_a_real_coin_clears_the_volatility_floor():
+    assert realized_volatility(_series(_volatile())["close"]) > MIN_VOLATILITY
+
+
+def test_a_stablecoin_is_dropped_from_the_panel():
+    frames = {
+        "BTC/USDT": _series(_volatile()),
+        "USD1/USDT": _series(_peg()),
+    }
+    panel, dropped = build_panel(frames, return_dropped=True)
+    assert list(panel.columns) == ["BTC/USDT"]
+    assert "USD1/USDT" in dropped
+    assert "stablecoin" in dropped["USD1/USDT"]
+
+
+def test_a_depegged_stablecoin_is_NOT_caught_by_the_volatility_screen():
+    """Documents a real limit rather than asserting a capability.
+
+    UST held its peg for months and then collapsed to near zero. Measured over
+    the full series the collapse dominates, so realized volatility clears the
+    floor and the screen lets it through.
+
+    That is the defensible behaviour: after the break it IS a real (dying)
+    asset whose price moves are genuine, and a survivorship-free universe is
+    supposed to keep coins that died. The name-based `EXCLUDED_BASES` list in
+    data/universe.py still covers the known algorithmic stables; this screen is
+    the structural backstop for the ones nobody listed, not a replacement.
+    """
+    closes = _peg(50) + [0.35, 0.09, 0.02, 0.01, 0.008]
+    assert realized_volatility(_series(closes)["close"]) > MIN_VOLATILITY
+
+
+def test_volatility_ignores_gaps_rather_than_propagating_nan():
+    closes = _volatile()
+    closes[5] = float("nan")
+    closes[17] = float("nan")
+    vol = realized_volatility(_series(closes)["close"])
+    assert vol > 0 and vol != float("inf")
+
+
+def test_a_series_too_short_to_measure_is_not_called_a_stablecoin():
+    """Absence of evidence must not silently exclude a coin — that would be a
+    fresh survivorship hole in the screen meant to prevent one. A few bars of
+    quiet drift look exactly like a peg."""
+    assert realized_volatility(_series(_peg(10))["close"]) == float("inf")
+
+
+def test_the_short_series_guard_is_the_documented_length():
+    assert MIN_VOLATILITY_BARS == 30
+    assert realized_volatility(_series(_peg(29))["close"]) == float("inf")
+    assert realized_volatility(_series(_peg(31))["close"]) < MIN_VOLATILITY
 
 
 # --- panel assembly --------------------------------------------------------

@@ -24,6 +24,23 @@ import pandas as pd
 #: 177,400x, so the screen has no need to be precise to catch the real cases.
 MAX_BAR_RETURN = 20.0
 
+#: Daily return standard deviation below which a series is treated as a
+#: stablecoin rather than a bet. Real coins run 3-6% daily; pegged tokens run
+#: under 0.1%. The gap is two orders of magnitude, so the exact threshold does
+#: not need to be defended — anything in between separates them cleanly.
+#:
+#: Screened here rather than by name in `data/universe.py` because new
+#: stablecoins keep being issued and a denylist only catches the ones already
+#: known. `USD1/USDT` reached the cache exactly that way and churned on noise
+#: around $1.00 at fee drag 1.14. A stablecoin is identifiable by what it does.
+MIN_VOLATILITY = 0.005
+
+#: Observations required before the volatility screen will call anything a
+#: stablecoin. A few bars of quiet drift are indistinguishable from a peg, and
+#: guessing wrong drops a real coin from the universe — the exact bias the
+#: universe builder is written to avoid.
+MIN_VOLATILITY_BARS = 30
+
 
 def find_redenominations(close: pd.Series) -> list:
     """Return the timestamps where `close` jumps by more than `MAX_BAR_RETURN`.
@@ -48,6 +65,28 @@ def find_redenominations(close: pd.Series) -> list:
     return list(ratio.index[ratio > MAX_BAR_RETURN])
 
 
+def realized_volatility(close: pd.Series) -> float:
+    """Standard deviation of simple returns, used to tell coins from pegs.
+
+    Returns `inf` when there are fewer than `MIN_VOLATILITY_BARS` observations,
+    so a short series is never mistaken for a stablecoin: absence of evidence
+    must not silently exclude a coin, which would open a fresh survivorship hole
+    inside the screen meant to prevent one. A handful of bars cannot distinguish
+    a peg from a coin that happened to drift quietly for a week.
+
+    Gaps are dropped rather than propagated, since delisted and thinly traded
+    coins routinely have them.
+    """
+    prices = pd.to_numeric(close, errors="coerce").dropna()
+    if len(prices) < MIN_VOLATILITY_BARS:
+        return float("inf")
+    returns = prices.pct_change().dropna()
+    if returns.empty:
+        return float("inf")
+    vol = returns.std()
+    return float("inf") if pd.isna(vol) else float(vol)
+
+
 def build_panel(frames: dict, screen: bool = True, return_dropped: bool = False):
     """Align per-symbol OHLCV frames into one wide close-price panel.
 
@@ -55,10 +94,11 @@ def build_panel(frames: dict, screen: bool = True, return_dropped: bool = False)
     index. The result has one column per symbol on the union of all indices,
     sorted, with NaN wherever a symbol had no bar — never a filled value.
 
-    With `screen=True` (the default) any symbol containing a redenomination is
-    excluded. Pass `return_dropped=True` to receive `(panel, dropped)` where
-    `dropped` maps the excluded symbol to the timestamps that triggered it, so a
-    caller can report what was removed instead of quietly shrinking the universe.
+    With `screen=True` (the default) symbols are excluded if they contain a
+    redenomination or are flat enough to be a stablecoin. Pass
+    `return_dropped=True` to receive `(panel, dropped)` where `dropped` maps the
+    excluded symbol to the reason, so a caller can report what was removed
+    instead of quietly shrinking the universe.
     """
     dropped = {}
     columns = {}
@@ -67,7 +107,11 @@ def build_panel(frames: dict, screen: bool = True, return_dropped: bool = False)
         if screen:
             hits = find_redenominations(close)
             if hits:
-                dropped[symbol] = hits
+                dropped[symbol] = f"redenomination at {hits[0].date()}"
+                continue
+            vol = realized_volatility(close)
+            if vol < MIN_VOLATILITY:
+                dropped[symbol] = f"stablecoin (daily vol {vol:.4%})"
                 continue
         columns[symbol] = close
 
