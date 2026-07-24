@@ -55,16 +55,11 @@ def members_at(volume_panel: pd.DataFrame, date, top_n: int = 50,
     if history.empty:
         return []
 
-    window = history.tail(lookback)
-    scores = {}
-    for symbol in history.columns:
-        series = history[symbol].dropna()
-        if len(series) < MIN_HISTORY_BARS:
-            continue                      # too new to have a trailing record
-        avg = window[symbol].dropna().mean()
-        if pd.isna(avg) or avg <= 0:
-            continue                      # not trading, so not investable
-        scores[symbol] = float(avg)
-
-    ranked = sorted(scores, key=lambda s: scores[s], reverse=True)
-    return ranked[:top_n]
+    # Vectorized on purpose: this runs once per rebalance over hundreds of
+    # columns, and a per-symbol Python loop made the full backtest take minutes.
+    counts = history.notna().sum()                    # observations so far
+    avg = history.tail(lookback).mean()               # trailing liquidity
+    eligible = counts[counts >= MIN_HISTORY_BARS].index
+    scores = avg[eligible].dropna()
+    scores = scores[scores > 0]                       # not trading, not investable
+    return list(scores.sort_values(ascending=False).index[:top_n])
