@@ -1,7 +1,12 @@
 # The `overfit` gate stopped measuring overfitting when the scan pinned its params
 
 **Date:** 2026-07-24
-**Status:** measured and verified; the remedy is an owner decision, not yet applied.
+**Status:** RESOLVED. Owner chose to replace the gate; shipped in `57be959` as
+gate 5 `unstable` (majority of traded folds positive out-of-sample), with a dated
+amendment in `docs/superpowers/specs/2026-07-23-measurement-harness-design.md`.
+The full 16-configuration scan was re-run afterwards and returns **0/16**, with
+`4h ma+trend` the single row failing on `unstable`; every other row still fails
+earlier on `churn` or `fee-drag`, so no other verdict moved.
 
 ## What prompted this
 
