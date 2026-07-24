@@ -84,8 +84,21 @@ def verdict(row: dict) -> tuple[str, str]:
         return "FAIL", "fee-drag"
     if row["folds_traded"] < MIN_FOLDS_TRADED:
         return "FAIL", "insufficient-folds"
-    if row["avg_is"] > 0 and row["avg_oos"] < 0:
-        return "FAIL", "overfit"
+    # Gate 5, respecified 2026-07-24 by owner decision. It used to read
+    # `avg_is > 0 and avg_oos < 0` and was labelled `overfit`. That rule could
+    # not do what its name claimed once `scan_one` pinned the walk-forward grid
+    # (12e0e61): with a one-entry grid nothing is selected, so nothing can be
+    # over-fitted, and because folds overlap by construction (fold k+1's
+    # in-sample slice IS fold k's out-of-sample slice) the gap between the two
+    # averages reduces to (first window - last window) / n_splits -- window
+    # drift, not curve-fitting. It also let a config through on a single lucky
+    # fold. For a pinned configuration the answerable question is temporal
+    # stability: did this one fixed setup make money out-of-sample in more
+    # windows than it lost in? See
+    # docs/research/2026-07-24-overfit-gate-is-measuring-window-drift.md and
+    # the dated amendment in the design spec.
+    if row["folds_positive_oos"] * 2 <= row["folds_traded"]:
+        return "FAIL", "unstable"
     # Gate 6, added 2026-07-23 by owner decision, after the first real scan
     # surfaced `1h rsi+trend` (edge +43.51%, net_return -1.16%) — a config
     # that only "beat" buy-and-hold because BTC fell harder over the sample.
@@ -111,10 +124,14 @@ def scan_one(df, symbol: str, timeframe: str, strategy_name: str, *,
     (it correctly wraps `TrendFilter` for the `+trend` variants), but its grid
     is replaced by a single entry from `default_params`, so `best_params` for
     every valid fold is that same fixed tuple. This makes every gate on a scan
-    row — including `overfit` and `insufficient-folds`, which read straight
+    row — including `unstable` and `insufficient-folds`, which read straight
     off the walk-forward folds — judge one object instead of two: the pinned
     configuration is what a soak test actually runs, so the gates must judge
     that configuration, not a fold-by-fold re-optimized one.
+
+    Pinning is also why gate 5 counts folds rather than comparing average
+    in-sample to average out-of-sample return: with a one-entry grid there is
+    no selection, so there is no curve-fitting for such a comparison to detect.
 
     Whether the strategy FAMILY has edge under per-fold re-optimization is a
     separate question — the `walkforward` CLI command still answers it, using
@@ -149,6 +166,9 @@ def scan_one(df, symbol: str, timeframe: str, strategy_name: str, *,
     traded = [f for f in folds if f["valid"] and f["oos_trades"] > 0]
     avg_is = sum(f["in_sample_return"] for f in traded) / len(traded) if traded else 0.0
     avg_oos = sum(f["oos_return"] for f in traded) / len(traded) if traded else 0.0
+    # Strictly positive: a fold that ended exactly flat produced no
+    # out-of-sample profit and must not count toward the majority.
+    positive_oos = sum(1 for f in traded if f["oos_return"] > 0)
 
     span_days = 0.0
     if len(df.index) >= 2:
@@ -171,6 +191,7 @@ def scan_one(df, symbol: str, timeframe: str, strategy_name: str, *,
         "avg_oos": avg_oos,
         "oos_gap": avg_is - avg_oos,
         "folds_traded": len(traded),
+        "folds_positive_oos": positive_oos,
     }
     row["verdict"], row["reason"] = verdict(row)
     return row
@@ -193,9 +214,15 @@ def format_table(rows: list) -> str:
     columns on purpose: `trades_per_day` sits right at the churn gate boundary
     in real data (e.g. 6.0004 vs a 6.0 ceiling), and rounding either column
     toward the passing side would make a genuine FAIL look like an arithmetic
-    PASS. `avgIS`/`avgOOS` are printed (rather than just their gap) so the
-    `overfit` gate's condition (`avg_is > 0 and avg_oos < 0`) can be checked
-    directly against the row that failed it.
+    PASS. `folds`/`posOOS` are both printed so the stability gate's condition
+    (`folds_positive_oos * 2 <= folds_traded`) can be checked directly against
+    the row that failed it.
+
+    `avgIS`/`avgOOS` are still printed, but they no longer gate anything and
+    they do NOT measure overfitting on a pinned row — see the gate 5 comment in
+    `verdict`. They are kept because the per-window magnitudes are worth seeing
+    next to the fold counts: 3 of 4 folds positive reads very differently when
+    the losing fold is -0.5% than when it is -40%.
 
     `format(float("inf"), spec)` already pads correctly under a float spec —
     used directly here (no wrapper) so the "fee_drag = inf" row keeps its
@@ -204,7 +231,8 @@ def format_table(rows: list) -> str:
     """
     header = (f"{'symbol':<10} {'tf':>4} {'strategy':<10} {'bars':>6} {'days':>8} "
               f"{'trades':>6} {'tr/day':>9} {'net':>8} {'edge':>8} {'maxDD':>7} "
-              f"{'worst':>7} {'feedrag':>8} {'avgIS':>8} {'avgOOS':>8} {'folds':>5}  verdict")
+              f"{'worst':>7} {'feedrag':>8} {'avgIS':>8} {'avgOOS':>8} {'folds':>5} "
+              f"{'posOOS':>6}  verdict")
     lines = [header, "-" * len(header)]
     for r in rows:
         tag = r["verdict"] if r["verdict"] == "PASS" else f"FAIL {r['reason']}"
@@ -214,6 +242,6 @@ def format_table(rows: list) -> str:
             f"{r['trades_per_day']:>9.4f} {r['net_return']:>8.2%} "
             f"{r['edge']:>+8.2%} {r['max_drawdown']:>7.1%} {r['worst_loss']:>7.1%} "
             f"{r['fee_drag']:>8.2f} {r['avg_is']:>+8.2%} {r['avg_oos']:>+8.2%} "
-            f"{r['folds_traded']:>5}  {tag}"
+            f"{r['folds_traded']:>5} {r['folds_positive_oos']:>6}  {tag}"
         )
     return "\n".join(lines)

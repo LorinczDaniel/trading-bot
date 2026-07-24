@@ -55,7 +55,8 @@ from backtest.scan import verdict, MIN_TRADES, MAX_TRADES_PER_DAY, MAX_FEE_DRAG
 
 def _passing_row(**overrides):
     row = {"trades": 50, "trades_per_day": 0.5, "fee_drag": 0.05,
-           "folds_traded": 3, "avg_is": 0.10, "avg_oos": 0.04,
+           "folds_traded": 3, "folds_positive_oos": 3,
+           "avg_is": 0.10, "avg_oos": 0.04,
            "net_return": 0.05}
     row.update(overrides)
     return row
@@ -91,13 +92,36 @@ def test_insufficient_folds_fails():
     assert verdict(_passing_row(folds_traded=1)) == ("FAIL", "insufficient-folds")
 
 
-def test_overfit_fails_when_profit_does_not_survive_out_of_sample():
-    assert verdict(_passing_row(avg_is=0.20, avg_oos=-0.05)) == ("FAIL", "overfit")
+def test_unstable_fails_when_a_minority_of_folds_survive_out_of_sample():
+    """Gate 5, respecified 2026-07-24. The config that PASSed the old
+    `overfit` rule -- `4h ma+trend`, 2 traded folds, one positive and one
+    negative out-of-sample -- must now fail: an average carried by a single
+    fold is not evidence of anything."""
+    row = _passing_row(folds_traded=2, folds_positive_oos=1)
+    assert verdict(row) == ("FAIL", "unstable")
 
 
-def test_losing_in_sample_is_not_overfit():
-    """Bad in both halves is honest failure, not curve-fitting."""
-    assert verdict(_passing_row(avg_is=-0.10, avg_oos=-0.05)) == ("PASS", "")
+def test_a_majority_of_positive_folds_passes():
+    assert verdict(_passing_row(folds_traded=4, folds_positive_oos=3)) == ("PASS", "")
+
+
+def test_a_tie_is_not_a_majority():
+    """Half the folds positive is a coin flip, so it fails. Pins the rule as
+    strictly-more-than-half rather than at-least-half."""
+    row = _passing_row(folds_traded=4, folds_positive_oos=2)
+    assert verdict(row) == ("FAIL", "unstable")
+
+
+def test_stability_does_not_read_the_average_returns():
+    """The gate must not regress to the old avg_is/avg_oos rule. This row is
+    stable by fold count but would have FAILed `overfit` (avg_is > 0,
+    avg_oos < 0) -- a positive average is no longer required, and a negative
+    one is no longer disqualifying, because on a pinned grid those averages
+    measure window drift, not curve-fitting. See
+    docs/research/2026-07-24-overfit-gate-is-measuring-window-drift.md."""
+    row = _passing_row(folds_traded=3, folds_positive_oos=2,
+                       avg_is=0.20, avg_oos=-0.05)
+    assert verdict(row) == ("PASS", "")
 
 
 def test_losing_fails_when_an_otherwise_clean_config_makes_no_money():
@@ -111,11 +135,11 @@ def test_positive_net_return_still_passes():
     assert verdict(_passing_row(net_return=0.02)) == ("PASS", "")
 
 
-def test_overfit_is_reported_before_losing():
-    """A config that is both overfit and losing must report `overfit` — this
-    pins gate 6 as strictly last, after `overfit`, not before it."""
-    row = _passing_row(avg_is=0.20, avg_oos=-0.05, net_return=-0.01)
-    assert verdict(row) == ("FAIL", "overfit")
+def test_unstable_is_reported_before_losing():
+    """A config that is both unstable and losing must report `unstable` — this
+    pins gate 6 as strictly last, after gate 5, not before it."""
+    row = _passing_row(folds_traded=2, folds_positive_oos=0, net_return=-0.01)
+    assert verdict(row) == ("FAIL", "unstable")
 
 
 def test_breakeven_net_return_fails_the_losing_gate():
@@ -137,7 +161,8 @@ def _row(strategy, v, reason="", edge=0.0):
             "bars": 1000, "days": 41.7, "trades": 50, "trades_per_day": 1.2,
             "net_return": 0.05, "edge": edge, "max_drawdown": -0.08,
             "worst_loss": 0.03, "fee_drag": 0.1, "avg_is": 0.1, "avg_oos": 0.05,
-            "oos_gap": 0.05, "folds_traded": 3, "verdict": v, "reason": reason}
+            "oos_gap": 0.05, "folds_traded": 3, "folds_positive_oos": 2,
+            "verdict": v, "reason": reason}
 
 
 def test_rank_puts_passing_configs_first_by_edge():
@@ -159,6 +184,30 @@ def test_format_table_shows_the_failure_reason():
     assert "churn" in out
     assert "ma" in out
     assert "BTC/USDT" in out
+
+
+def test_format_table_shows_the_fold_counts_the_stability_gate_reads():
+    """Gate 5 reads `folds_positive_oos` against `folds_traded`, so both must
+    be visible on the row. Printing only the average returns would leave a
+    `FAIL unstable` verdict unverifiable against its own table — the same
+    reason avgIS/avgOOS were printed when the old gate read them."""
+    row = _row("ma", "FAIL", "unstable")
+    row["folds_traded"] = 2
+    row["folds_positive_oos"] = 1
+
+    out = format_table([row])
+    header, body = out.splitlines()[0], out.splitlines()[2]
+
+    assert "posOOS" in header
+    # The count itself must appear under that column, not just the header.
+    # `posOOS` is a 6-wide right-aligned field, so the header label starts
+    # exactly where the body cell starts.
+    col = header.index("posOOS")
+    assert body[col:col + 6].strip() == "1"
+    # And the neighbouring `folds` cell must still read 2 — proof the two
+    # counts the gate compares are separately legible, not one merged column.
+    fold_col = header.index("folds")
+    assert body[fold_col:fold_col + 5].strip() == "2"
 
 
 def test_format_table_stays_aligned_when_fee_drag_is_infinite():
@@ -230,7 +279,7 @@ def test_scan_one_benchmarks_edge_over_the_traded_window_not_bar_zero():
 def test_scan_one_pins_walk_forward_to_the_default_params(monkeypatch):
     """Walk-forward inside `scan_one` must evaluate the SAME fixed params the
     headline metrics report -- not a grid re-optimized per fold -- or the
-    `overfit`/`insufficient-folds` gates judge a different configuration than
+    `unstable`/`insufficient-folds` gates judge a different configuration than
     every other gate on the row.
 
     Captures the grid `scan_one` actually hands to `walk_forward` (not just
@@ -273,6 +322,79 @@ def test_scan_one_pins_walk_forward_to_the_default_params(monkeypatch):
     assert valid_folds, "expected at least one valid (traded) fold"
     for f in valid_folds:
         assert f["best_params"] == default_params("ma")
+
+
+def test_scan_one_counts_only_traded_folds_that_were_positive_out_of_sample():
+    """`folds_positive_oos` must count folds whose OOS return is strictly
+    positive, among the traded folds only — an invalid or non-trading fold is
+    absent evidence, not positive evidence.
+
+    Drives `walk_forward` through a stub so the fold shape is exact and the
+    assertion cannot drift with the price data: 4 folds, of which one is
+    invalid, one traded at a loss, and two traded profitably.
+    """
+    import numpy as np
+    import backtest.scan as scan_mod
+
+    folds = [
+        {"fold": 0, "valid": True, "best_params": (20, 50),
+         "in_sample_return": 0.05, "in_sample_trades": 9,
+         "oos_return": 0.03, "oos_trades": 5},
+        {"fold": 1, "valid": False, "best_params": None,
+         "in_sample_return": 0.0, "in_sample_trades": 0,
+         "oos_return": 0.0, "oos_trades": 0},
+        {"fold": 2, "valid": True, "best_params": (20, 50),
+         "in_sample_return": 0.04, "in_sample_trades": 8,
+         "oos_return": -0.02, "oos_trades": 6},
+        {"fold": 3, "valid": True, "best_params": (20, 50),
+         "in_sample_return": 0.01, "in_sample_trades": 7,
+         "oos_return": 0.06, "oos_trades": 4},
+    ]
+    monkey = lambda *a, **k: folds
+    original = scan_mod.walk_forward
+    scan_mod.walk_forward = monkey
+    try:
+        n = 400
+        rng = np.random.default_rng(2)
+        close = 100 + np.cumsum(rng.normal(0.05, 1.0, n))
+        index = pd.date_range("2026-01-01", periods=n, freq="1h")
+        df = pd.DataFrame({"close": close}, index=index)
+        row = scan_mod.scan_one(df, "BTC/USDT", "1h", "ma", warmup=60, splits=4)
+    finally:
+        scan_mod.walk_forward = original
+
+    assert row["folds_traded"] == 3
+    assert row["folds_positive_oos"] == 2
+
+
+def test_scan_one_does_not_count_a_breakeven_fold_as_positive():
+    """Pins `> 0`, not `>= 0`: a fold that ended exactly flat produced no
+    out-of-sample profit and must not prop up the majority."""
+    import numpy as np
+    import backtest.scan as scan_mod
+
+    folds = [
+        {"fold": 0, "valid": True, "best_params": (20, 50),
+         "in_sample_return": 0.05, "in_sample_trades": 9,
+         "oos_return": 0.0, "oos_trades": 5},
+        {"fold": 1, "valid": True, "best_params": (20, 50),
+         "in_sample_return": 0.04, "in_sample_trades": 8,
+         "oos_return": 0.03, "oos_trades": 6},
+    ]
+    original = scan_mod.walk_forward
+    scan_mod.walk_forward = lambda *a, **k: folds
+    try:
+        n = 400
+        rng = np.random.default_rng(3)
+        close = 100 + np.cumsum(rng.normal(0.05, 1.0, n))
+        index = pd.date_range("2026-01-01", periods=n, freq="1h")
+        df = pd.DataFrame({"close": close}, index=index)
+        row = scan_mod.scan_one(df, "BTC/USDT", "1h", "ma", warmup=60, splits=2)
+    finally:
+        scan_mod.walk_forward = original
+
+    assert row["folds_traded"] == 2
+    assert row["folds_positive_oos"] == 1
 
 
 def test_scan_one_flags_a_churning_config():

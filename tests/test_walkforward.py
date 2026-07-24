@@ -127,9 +127,10 @@ def test_fold_with_no_valid_params_is_marked_invalid():
 
 
 def test_walk_forward_pins_a_known_oos_outcome():
-    """avg_oos is the sole input to the `overfit` gate -- it decided one of
-    the 16 rejections in the real scan -- but no test asserted a specific
-    oos_return or a nonzero oos_trades count; test_walk_forward_structure
+    """`oos_return` drives gate 5 of the scan (`unstable` since 2026-07-24,
+    `overfit` before that) and decided one of the 16 rejections in the real
+    scan -- but no test asserted a specific oos_return or a nonzero
+    oos_trades count; test_walk_forward_structure
     only checks `isinstance(r["oos_return"], float)`, which a stubbed-out
     out-of-sample simulation would still satisfy.
 

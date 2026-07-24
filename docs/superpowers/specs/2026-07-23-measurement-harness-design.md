@@ -220,7 +220,7 @@ This also removes a second-order distortion: with the halt live, a walk-forward
 fold could latch off partway through, and its out-of-sample return would measure
 "halted early" rather than true edge.
 | Fold coverage | at least 2 walk-forward folds traded | `insufficient-folds` |
-| Overfit | fails when `avg_is > 0` **and** `avg_oos < 0` | `overfit` |
+| Stability | fails unless a **majority** of traded folds were positive out-of-sample (`folds_positive_oos * 2 > folds_traded`) | `unstable` |
 | Losing | fails when `net_return <= 0` | `losing` |
 
 A configuration failing any gate is reported as FAIL with its label; it is not
@@ -261,6 +261,64 @@ deployable however well it beat holding.
 **Effect on the delivered result: none.** 0 of 16 configurations cleared the
 original five gates, so none reaches the sixth. The 0/16 finding stands
 unchanged; `losing` governs future scans, not this one.
+
+### Amendment — 2026-07-24: gate 5 respecified from `overfit` to `unstable`
+
+Gate 5 previously read `avg_is > 0 and avg_oos < 0` under the label `overfit`.
+It has been replaced by a fold-stability rule: a configuration fails unless a
+**majority of its traded folds were positive out-of-sample**. Label: `unstable`.
+By owner decision, after the measurement recorded in
+`docs/research/2026-07-24-overfit-gate-is-measuring-window-drift.md`.
+
+**Why the old rule could not do its job.** The pin-params fix (`12e0e61`) made
+`scan_one` hand `walk_forward` a **one-entry** grid, so every gate would judge
+the same configuration the headline metrics were measured on. That was correct,
+but it removed the thing the `overfit` label named: with a single grid entry the
+optimizer selects nothing, so nothing is fitted and nothing can be over-fitted.
+`avg_is` and `avg_oos` then compare one fixed strategy across two sets of
+windows rather than a fitted choice against fresh data.
+
+Worse, the folds overlap by construction (`backtest/walkforward.py:43-45`):
+fold *k+1*'s in-sample slice **is** fold *k*'s out-of-sample slice. So on a
+pinned row with all folds valid, the reported gap reduces exactly to
+
+```
+oos_gap = (first_window_return - last_window_return) / n_splits
+```
+
+verified to seven digits against BTC/USDT 4h. That is window drift, not
+curve-fitting. A gate label must not claim a property it cannot measure.
+
+**Why a fold-count rule instead.** For a pinned configuration — which is what a
+soak test actually runs — the answerable question is temporal stability: did
+this one fixed setup make money out-of-sample in more windows than it lost in?
+The count survives the overlap problem, because each fold's out-of-sample
+window is judged on its own rather than averaged against its neighbours. Ties
+fail: half the folds positive is a coin flip, not evidence. Only folds that
+actually traded are counted; an invalid or non-trading fold is absent evidence,
+not positive evidence.
+
+**Effect on the delivered result: it changes it, from 1/16 to 0/16.** This is
+the first amendment that does. `4h ma+trend` — the single configuration that
+passed after the pin-params fix — has 2 traded folds, one positive
+(`+1.29%`) and one negative (`−0.99%`) out-of-sample, on **4 out-of-sample
+trades in total**. Its `avg_oos` of `+0.15%` was the average of those two
+numbers. Under the stability rule it fails, and no configuration passes.
+
+**Why this does not reopen the pre-commitment question.** Same reasoning as the
+`losing` amendment, and it applies with more force here: this is a strict
+tightening, so it can only turn a PASS into a FAIL. The pre-commitment exists to
+stop a threshold being *loosened* until something passes. Nothing here makes a
+failing configuration pass; the change removes the project's only passing
+result. That direction is the evidence that the gates are being read honestly
+rather than negotiated with.
+
+**What is deliberately not changed.** `cli.py walkforward` still re-optimizes
+over the full grid. "Does selecting parameters on this strategy family hold up
+out-of-sample?" is a real and separate question, and that command remains the
+place it is answered. `avg_is`/`avg_oos` remain as reported columns — they no
+longer gate anything, and the scan's docstrings now state that they measure
+window drift on a pinned row.
 
 ### Optimizer gate
 
