@@ -40,13 +40,22 @@ a dimension to optimise. `scan_one` passes the same band to `build_strategy` and
 | 0.020 | 26 | −4.21% | −5.55% | 0.24 | 2 | 1 | FAIL unstable |
 | 0.030 | 15 | +0.06% | −1.28% | 1.66 | 1 | 1 | FAIL too-few-trades |
 
-**Do not read the PASS rows as a validated result.** Bands 0.005, 0.006 and 0.007 all
-make **the same 33 trades**, yet fee drag reads 0.24, 0.42 and 0.28 and the verdict goes
-PASS, FAIL, PASS. A gate outcome that flips on a 0.001 change in a parameter — while the
-trade count does not even move — is measuring noise around a threshold, not an edge.
-Picking 0.005 because it passed on the same sample used to report it is precisely the
-data-snooping this harness was built to adjudicate, and exactly what the tsmom paper was
-criticised for in `2026-07-23-tsmom-test-results.md`.
+**Do not read the PASS rows as a validated result.** Across bands 0.005, 0.006 and 0.007
+the trade **count** is pinned at 33 while net swings +6.16%, +3.59%, +5.34% and the
+verdict goes PASS, FAIL, PASS. The differing returns prove these are not the same trades
+— a 0.001 change in the band is reshuffling *which* crossings qualify (and when they
+exit) without changing how many. A gate outcome that flips under that much reshuffling is
+measuring noise around a threshold, not an edge. Picking 0.005 because it passed on the
+same sample used to report it is precisely the data-snooping this harness was built to
+adjudicate, and exactly what the tsmom paper was criticised for in
+`2026-07-23-tsmom-test-results.md`.
+
+Note *which* gates do the flipping. `4h ma` is gated by `fee-drag` and `posOOS`, never by
+`net_return` — so the band robustly lifts profitability (next section) while the PASS
+hinges entirely on the two noisier secondary gates hovering at their thresholds
+(fee-drag against 0.30, posOOS against the majority line). That is the honest synthesis:
+a real improvement in the number nobody is gating on, and coin-flip behaviour in the ones
+that decide.
 
 The fee-drag response is not monotonic either (0.52, 0.36, 0.36, 0.24, 0.42, 0.28, 0.21,
 0.25). The apparent monotonicity in a first coarse sweep (0.75 → 0.52 → 0.24 → 0.21) was
