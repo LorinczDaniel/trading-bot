@@ -5,3 +5,4 @@ pyarrow>=14.0
 pydantic>=2.5
 pydantic-settings>=2.1
 yfinance
+scipy

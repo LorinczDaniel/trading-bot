@@ -115,10 +115,20 @@ def _fetch_zip_csv(url: str) -> pd.DataFrame | None:
         return None
 
 
-def download(symbol: str, kind: str, dates, cache_dir="cache/microstructure"):
-    """Download and summarise `kind` for `symbol` over `dates`, caching per symbol.
+#: Days fetched between flushes to disk. A symbol-year is thousands of requests
+#: and an interrupted run used to lose everything since the last completed
+#: SYMBOL, which for bookDepth is ~24 minutes of work. Flushing periodically
+#: means a kill costs at most this many days.
+FLUSH_EVERY = 50
 
-    Days already cached are skipped, so an interrupted run resumes cheaply.
+
+def download(symbol: str, kind: str, dates, cache_dir="cache/microstructure",
+             flush_every: int = FLUSH_EVERY, progress=None):
+    """Download and summarise `kind` for `symbol` over `dates`.
+
+    Days already cached are skipped and results are flushed every
+    `flush_every` new days, so an interrupted run resumes having kept nearly
+    all of its work rather than restarting the symbol.
     """
     os.makedirs(cache_dir, exist_ok=True)
     path = os.path.join(cache_dir, f"{symbol}_{kind}.parquet")
@@ -126,21 +136,36 @@ def download(symbol: str, kind: str, dates, cache_dir="cache/microstructure"):
     have = set(existing.index) if len(existing) else set()
 
     summarise = summarise_book_depth if kind == "bookDepth" else summarise_metrics
-    chunks = []
+    frames = [existing] if len(existing) else []
+    pending, fetched = [], 0
+
+    def flush():
+        nonlocal pending
+        if not pending:
+            return
+        frames.extend(pending)
+        combined = pd.concat(frames)
+        combined = combined[~combined.index.duplicated(keep="last")].sort_index()
+        combined.to_parquet(path)
+        frames[:] = [combined]
+        pending = []
+
     for d in dates:
         stamp = d.strftime("%Y-%m-%d")
         if pd.Timestamp(stamp) in have:
             continue
         raw = _fetch_zip_csv(f"{BASE}/{kind}/{symbol}/{symbol}-{kind}-{stamp}.zip")
-        if raw is None or raw.empty:
-            continue
-        s = summarise(raw)
-        if not s.empty:
-            chunks.append(s)
+        fetched += 1
+        if raw is not None and not raw.empty:
+            s = summarise(raw)
+            if not s.empty:
+                pending.append(s)
+        if len(pending) >= flush_every:
+            flush()
+            if progress:
+                progress(symbol, kind, fetched)
+    flush()
 
-    if not chunks and len(existing) == 0:
+    if not frames:
         return pd.DataFrame()
-    combined = pd.concat([existing] + chunks) if chunks else existing
-    combined = combined[~combined.index.duplicated(keep="last")].sort_index()
-    combined.to_parquet(path)
-    return combined
+    return frames[0]

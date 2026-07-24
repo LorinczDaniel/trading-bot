@@ -119,6 +119,56 @@ def test_ratios_are_averaged_over_the_day():
     assert out["toptrader_ls"].iloc[0] == pytest.approx(2.0)
 
 
+def test_download_flushes_partial_progress(tmp_path, monkeypatch):
+    """An interrupted run must keep the days it already fetched.
+
+    Before this, results were written only after a whole SYMBOL finished, so a
+    kill mid-symbol lost up to 24 minutes of downloading for bookDepth. The
+    flush interval bounds that loss.
+    """
+    import data.binance_archive as mod
+
+    calls = {"n": 0}
+
+    def fake_fetch(url):
+        calls["n"] += 1
+        if calls["n"] > 6:
+            raise KeyboardInterrupt          # simulate the process being killed
+        day = url.rsplit("-", 3)[-3:]
+        stamp = "-".join(day).replace(".zip", "")
+        return _metric_rows([f"{stamp} 00:05:00"], 100.0 + calls["n"], 1.0)
+
+    monkeypatch.setattr(mod, "_fetch_zip_csv", fake_fetch)
+    dates = pd.date_range("2026-01-01", periods=20, freq="D")
+    try:
+        mod.download("BTCUSDT", "metrics", dates, cache_dir=str(tmp_path),
+                     flush_every=3)
+    except KeyboardInterrupt:
+        pass
+
+    saved = pd.read_parquet(tmp_path / "BTCUSDT_metrics.parquet")
+    assert len(saved) >= 3, "partial progress was not flushed"
+
+
+def test_download_resumes_without_refetching(tmp_path, monkeypatch):
+    import data.binance_archive as mod
+
+    seen = []
+
+    def fake_fetch(url):
+        stamp = url.rsplit("-", 3)[-3:]
+        s = "-".join(stamp).replace(".zip", "")
+        seen.append(s)
+        return _metric_rows([f"{s} 00:05:00"], 100.0, 1.0)
+
+    monkeypatch.setattr(mod, "_fetch_zip_csv", fake_fetch)
+    dates = pd.date_range("2026-01-01", periods=5, freq="D")
+    mod.download("BTCUSDT", "metrics", dates, cache_dir=str(tmp_path))
+    first = len(seen)
+    mod.download("BTCUSDT", "metrics", dates, cache_dir=str(tmp_path))
+    assert len(seen) == first, "cached days were refetched on the second run"
+
+
 def test_missing_columns_do_not_crash_the_summary():
     """Binance changed this schema over time; early files lack some columns."""
     df = pd.DataFrame({"create_time": ["2026-01-01 00:05:00"],
